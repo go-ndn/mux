@@ -5,9 +5,7 @@ import (
 	"github.com/go-ndn/ndn"
 )
 
-type Handler interface {
-	ServeNDN(*ndn.Face, *ndn.Interest)
-}
+type Handler func(*ndn.Face, *ndn.Interest)
 
 type Router struct {
 	m lpm.Matcher
@@ -24,7 +22,7 @@ func (r *Router) Handle(name string, h Handler) {
 func (r *Router) Run(face *ndn.Face, ch <-chan *ndn.Interest) {
 	for i := range ch {
 		r.m.Match(i.Name.String(), func(v interface{}) {
-			go v.(Handler).ServeNDN(face, i)
+			go v.(Handler)(face, i)
 		})
 	}
 }
