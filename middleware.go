@@ -74,19 +74,27 @@ func Segmentor(size int) Middleware {
 			for _, d := range s.content {
 				if len(d.Content) <= size {
 					w.SendData(d)
-				} else {
-					for start := 0; start < len(d.Content); start += size {
-						end := start + size
-						if end > len(d.Content) {
-							end = len(d.Content)
-						}
-						segNum := make([]byte, 8)
-						binary.BigEndian.PutUint64(segNum, uint64(start))
-						w.SendData(&ndn.Data{
-							Name:    ndn.Name{Components: append(d.Name.Components, segNum)},
-							Content: d.Content[start:end],
-						})
+					continue
+				}
+				for start := 0; start < len(d.Content); start += size {
+					end := start + size
+					if end > len(d.Content) {
+						end = len(d.Content)
 					}
+					segNum := make([]byte, 8)
+					binary.BigEndian.PutUint64(segNum, uint64(start))
+					seg := &ndn.Data{
+						Name: ndn.Name{Components: append(d.Name.Components, segNum)},
+						MetaInfo: ndn.MetaInfo{
+							ContentType:     d.MetaInfo.ContentType,
+							FreshnessPeriod: d.MetaInfo.FreshnessPeriod,
+						},
+						Content: d.Content[start:end],
+					}
+					if len(seg.Content) < size {
+						seg.MetaInfo.FinalBlockID.Component = segNum
+					}
+					w.SendData(seg)
 				}
 			}
 		})
