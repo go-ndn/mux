@@ -25,26 +25,26 @@ func (c *Chain) Use(m Middleware) {
 	c.mw = m(c.mw)
 }
 
-func (c *Chain) Run(w DataSender, ch <-chan *ndn.Interest) {
+func (c *Chain) Run(w Sender, ch <-chan *ndn.Interest) {
 	for i := range ch {
 		go c.mw.ServeNDN(w, i)
 	}
 }
 
 type cacher struct {
-	w DataSender
+	Sender
 }
 
 func (c *cacher) SendData(d *ndn.Data) {
-	c.w.SendData(d)
+	c.Sender.SendData(d)
 	ndn.ContentStore.Add(d)
 }
 
 func Cacher(next Handler) Handler {
-	return HandlerFunc(func(w DataSender, i *ndn.Interest) {
+	return HandlerFunc(func(w Sender, i *ndn.Interest) {
 		cache := ndn.ContentStore.Get(i)
 		if cache == nil {
-			next.ServeNDN(&cacher{w: w}, i)
+			next.ServeNDN(&cacher{Sender: w}, i)
 		} else {
 			w.SendData(cache)
 		}
@@ -52,7 +52,7 @@ func Cacher(next Handler) Handler {
 }
 
 func Logger(next Handler) Handler {
-	return HandlerFunc(func(w DataSender, i *ndn.Interest) {
+	return HandlerFunc(func(w Sender, i *ndn.Interest) {
 		before := time.Now()
 		next.ServeNDN(w, i)
 		fmt.Printf("%s completed in %s\n", i.Name, time.Now().Sub(before))
@@ -60,20 +60,20 @@ func Logger(next Handler) Handler {
 }
 
 type segmentor struct {
-	w    DataSender
+	Sender
 	size int
 }
 
 func (s *segmentor) SendData(d *ndn.Data) {
 	if len(d.Content) <= s.size {
-		s.w.SendData(d)
+		s.Sender.SendData(d)
 	} else {
-		segNum := make([]byte, 8)
 		for start := 0; start < len(d.Content); start += s.size {
 			end := start + s.size
 			if end > len(d.Content) {
 				end = len(d.Content)
 			}
+			segNum := make([]byte, 8)
 			binary.BigEndian.PutUint64(segNum, uint64(start))
 			seg := &ndn.Data{
 				Name: ndn.Name{Components: append(d.Name.Components, segNum)},
@@ -86,15 +86,15 @@ func (s *segmentor) SendData(d *ndn.Data) {
 			if len(seg.Content) < s.size {
 				seg.MetaInfo.FinalBlockID.Component = segNum
 			}
-			s.w.SendData(seg)
+			s.Sender.SendData(seg)
 		}
 	}
 }
 
 func Segmentor(size int) Middleware {
 	return func(next Handler) Handler {
-		return HandlerFunc(func(w DataSender, i *ndn.Interest) {
-			next.ServeNDN(&segmentor{w: w, size: size}, i)
+		return HandlerFunc(func(w Sender, i *ndn.Interest) {
+			next.ServeNDN(&segmentor{Sender: w, size: size}, i)
 		})
 	}
 }
@@ -102,8 +102,8 @@ func Segmentor(size int) Middleware {
 func Assemble(w InterestSender, name ndn.Name) []byte {
 	var content []byte
 	var start int
-	segNum := make([]byte, 8)
 	for {
+		segNum := make([]byte, 8)
 		binary.BigEndian.PutUint64(segNum, uint64(start))
 		d, ok := <-w.SendInterest(&ndn.Interest{
 			Name: ndn.Name{Components: append(name.Components, segNum)},

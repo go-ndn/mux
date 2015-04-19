@@ -21,7 +21,7 @@ func (r *Router) HandleFunc(name string, h HandlerFunc) {
 	r.m.Update(name, func(v interface{}) interface{} { return h }, false)
 }
 
-func (r *Router) ServeNDN(w DataSender, i *ndn.Interest) {
+func (r *Router) ServeNDN(w Sender, i *ndn.Interest) {
 	r.m.Match(i.Name.String(), func(v interface{}) {
 		v.(Handler).ServeNDN(w, i)
 	})
