@@ -24,3 +24,5 @@ type Sender interface {
 	InterestSender
 	DataSender
 }
+
+type Middleware func(Handler) Handler
