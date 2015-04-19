@@ -66,6 +66,9 @@ type segmentor struct {
 
 func (s *segmentor) SendData(d *ndn.Data) {
 	if len(d.Content) <= s.size {
+		if len(d.Name.Components) > 0 {
+			d.MetaInfo.FinalBlockID.Component = d.Name.Components[len(d.Name.Components)-1]
+		}
 		s.Sender.SendData(d)
 	} else {
 		for start := 0; start < len(d.Content); start += s.size {
