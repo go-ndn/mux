@@ -13,12 +13,15 @@ func NewRouter() *Router {
 	return &Router{m: lpm.New()}
 }
 
-func (r *Router) Handle(name string, h Handler) {
+func (r *Router) Handle(name string, h Handler, mw ...Middleware) {
+	for _, m := range mw {
+		h = m(h)
+	}
 	r.m.Update(name, func(v interface{}) interface{} { return h }, false)
 }
 
-func (r *Router) HandleFunc(name string, h HandlerFunc) {
-	r.m.Update(name, func(v interface{}) interface{} { return h }, false)
+func (r *Router) HandleFunc(name string, h HandlerFunc, mw ...Middleware) {
+	r.Handle(name, h, mw...)
 }
 
 func (r *Router) ServeNDN(w Sender, i *ndn.Interest) {
