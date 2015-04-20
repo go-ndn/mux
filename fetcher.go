@@ -7,16 +7,37 @@ import (
 	"github.com/go-ndn/ndn"
 )
 
-type Transformer func([]byte) []byte
+type Verifier interface {
+	Verify(*ndn.Data) bool
+}
+
+type VerifierFunc func(*ndn.Data) bool
+
+func (f VerifierFunc) Verify(d *ndn.Data) bool {
+	return f(d)
+}
+
+type Transformer interface {
+	Transform([]byte) []byte
+}
+
+type TransformerFunc func([]byte) []byte
+
+func (f TransformerFunc) Transform(b []byte) []byte {
+	return f(b)
+}
+
 type FetcherMiddleware func(Transformer) Transformer
 
 type Fetcher struct {
 	mw Transformer
+	v  []Verifier
 }
 
 func NewFetcher() *Fetcher {
 	return &Fetcher{
-		mw: func(b []byte) []byte { return b },
+		mw: TransformerFunc(func(b []byte) []byte { return b }),
+		v:  []Verifier{VerifierFunc(sha256Verifier)},
 	}
 }
 
@@ -24,7 +45,11 @@ func (f *Fetcher) Use(m FetcherMiddleware) {
 	f.mw = m(f.mw)
 }
 
-func (f *Fetcher) Validate(d *ndn.Data) bool {
+func (f *Fetcher) UseVerifier(v Verifier) {
+	f.v = append(f.v, v)
+}
+
+func sha256Verifier(d *ndn.Data) bool {
 	switch d.SignatureInfo.SignatureType {
 	case ndn.SignatureTypeDigestSha256:
 		digest, err := ndn.NewSha256(d)
@@ -33,7 +58,7 @@ func (f *Fetcher) Validate(d *ndn.Data) bool {
 		}
 		return bytes.Equal(digest, d.SignatureValue)
 	}
-	return false
+	return true
 }
 
 func (f *Fetcher) Fetch(w InterestSender, name ndn.Name, mw ...FetcherMiddleware) []byte {
@@ -47,8 +72,10 @@ func (f *Fetcher) Fetch(w InterestSender, name ndn.Name, mw ...FetcherMiddleware
 		if !ok {
 			return nil
 		}
-		if !f.Validate(d) {
-			return nil
+		for _, v := range f.v {
+			if !v.Verify(d) {
+				return nil
+			}
 		}
 		content = append(content, d.Content...)
 		if len(d.Name.Components) > 0 &&
@@ -61,9 +88,9 @@ func (f *Fetcher) Fetch(w InterestSender, name ndn.Name, mw ...FetcherMiddleware
 			break
 		}
 	}
-	h := f.mw
+	t := f.mw
 	for _, m := range mw {
-		h = m(h)
+		t = m(t)
 	}
-	return h(content)
+	return t.Transform(content)
 }
