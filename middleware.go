@@ -1,7 +1,6 @@
 package mux
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"time"
@@ -78,27 +77,4 @@ func Segmentor(size int) Middleware {
 			next.ServeNDN(&segmentor{Sender: w, size: size}, i)
 		})
 	}
-}
-
-func Assemble(w InterestSender, name ndn.Name) []byte {
-	var content []byte
-	var start int
-	for {
-		segNum := make([]byte, 8)
-		binary.BigEndian.PutUint64(segNum, uint64(start))
-		d, ok := <-w.SendInterest(&ndn.Interest{
-			Name: ndn.Name{Components: append(name.Components, segNum)},
-		})
-		if !ok {
-			return nil
-		}
-		content = append(content, d.Content...)
-		if len(d.Name.Components) > 0 &&
-			!bytes.Equal(d.Name.Components[len(d.Name.Components)-1], d.MetaInfo.FinalBlockID.Component) {
-			start += len(d.Content)
-		} else {
-			break
-		}
-	}
-	return content
 }
