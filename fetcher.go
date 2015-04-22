@@ -27,22 +27,27 @@ func (f TransformerFunc) Transform(b []byte) []byte {
 	return f(b)
 }
 
-type FetcherMiddleware func(Transformer) Transformer
+type Fetchware func(Transformer) Transformer
 
 type Fetcher struct {
-	mw Transformer
+	fw Transformer
+	mw []Middleware
 	v  []Verifier
 }
 
 func NewFetcher() *Fetcher {
 	return &Fetcher{
-		mw: TransformerFunc(func(b []byte) []byte { return b }),
+		fw: TransformerFunc(func(b []byte) []byte { return b }),
 		v:  []Verifier{VerifierFunc(sha256Verifier)},
 	}
 }
 
-func (f *Fetcher) Use(m FetcherMiddleware) {
-	f.mw = m(f.mw)
+func (f *Fetcher) Use(m Middleware) {
+	f.mw = append(f.mw, m)
+}
+
+func (f *Fetcher) UseFetchware(m Fetchware) {
+	f.fw = m(f.fw)
 }
 
 func (f *Fetcher) UseVerifier(v Verifier) {
@@ -61,36 +66,56 @@ func sha256Verifier(d *ndn.Data) bool {
 	return true
 }
 
-func (f *Fetcher) Fetch(w InterestSender, name ndn.Name, mw ...FetcherMiddleware) []byte {
-	var content []byte
-	var start int
-	comp := name.Components
-	for {
-		d, ok := <-w.SendInterest(&ndn.Interest{
-			Name: ndn.Name{Components: comp},
-		})
+type assembler struct {
+	InterestSender
+
+	content []byte
+	offset  int
+	next    ndn.Name
+}
+
+func (a *assembler) SendData(d *ndn.Data) {
+	a.content = append(a.content, d.Content...)
+	a.next.Components = nil
+	if len(d.Name.Components) > 0 &&
+		!bytes.Equal(d.Name.Components[len(d.Name.Components)-1], d.MetaInfo.FinalBlockID.Component) {
+		a.offset += len(d.Content)
+		a.next.Components = make([]ndn.Component, len(d.Name.Components))
+		copy(a.next.Components, d.Name.Components[:len(d.Name.Components)-1])
+		segNum := make([]byte, 8)
+		binary.BigEndian.PutUint64(segNum, uint64(a.offset))
+		a.next.Components[len(a.next.Components)-1] = segNum
+	}
+}
+
+func (f *Fetcher) Fetch(iw InterestSender, name ndn.Name, fw ...Fetchware) []byte {
+	a := &assembler{
+		InterestSender: iw,
+		next:           name,
+	}
+	h := Handler(HandlerFunc(func(w Sender, i *ndn.Interest) {
+		d, ok := <-iw.SendInterest(i)
 		if !ok {
-			return nil
+			return
 		}
 		for _, v := range f.v {
 			if !v.Verify(d) {
-				return nil
+				return
 			}
 		}
-		content = append(content, d.Content...)
-		if len(d.Name.Components) > 0 &&
-			!bytes.Equal(d.Name.Components[len(d.Name.Components)-1], d.MetaInfo.FinalBlockID.Component) {
-			start += len(d.Content)
-			segNum := make([]byte, 8)
-			binary.BigEndian.PutUint64(segNum, uint64(start))
-			comp = append(d.Name.Components[:len(d.Name.Components)-1], segNum)
-		} else {
-			break
-		}
+		w.SendData(d)
+	}))
+	for _, m := range f.mw {
+		h = m(h)
 	}
-	t := f.mw
-	for _, m := range mw {
+	offset := -1
+	for a.next.Components != nil && offset < a.offset {
+		offset = a.offset
+		h.ServeNDN(a, &ndn.Interest{Name: a.next})
+	}
+	t := f.fw
+	for _, m := range fw {
 		t = m(t)
 	}
-	return t.Transform(content)
+	return t.Transform(a.content)
 }
