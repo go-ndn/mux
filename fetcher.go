@@ -71,27 +71,26 @@ type assembler struct {
 
 	content []byte
 	offset  int
-	next    ndn.Name
+	next    []ndn.Component
 }
 
 func (a *assembler) SendData(d *ndn.Data) {
 	a.content = append(a.content, d.Content...)
-	a.next.Components = nil
+	a.next = nil
 	if len(d.Name.Components) > 0 &&
 		!bytes.Equal(d.Name.Components[len(d.Name.Components)-1], d.MetaInfo.FinalBlockID.Component) {
 		a.offset += len(d.Content)
-		a.next.Components = make([]ndn.Component, len(d.Name.Components))
-		copy(a.next.Components, d.Name.Components[:len(d.Name.Components)-1])
-		segNum := make([]byte, 8)
-		binary.BigEndian.PutUint64(segNum, uint64(a.offset))
-		a.next.Components[len(a.next.Components)-1] = segNum
+		a.next = make([]ndn.Component, len(d.Name.Components))
+		copy(a.next, d.Name.Components[:len(d.Name.Components)-1])
+		a.next[len(a.next)-1] = make([]byte, 8)
+		binary.BigEndian.PutUint64(a.next[len(a.next)-1], uint64(a.offset))
 	}
 }
 
 func (f *Fetcher) Fetch(iw InterestSender, name ndn.Name, fw ...Fetchware) []byte {
 	a := &assembler{
 		InterestSender: iw,
-		next:           name,
+		next:           name.Components,
 	}
 	h := Handler(HandlerFunc(func(w Sender, i *ndn.Interest) {
 		d, ok := <-iw.SendInterest(i)
@@ -109,12 +108,12 @@ func (f *Fetcher) Fetch(iw InterestSender, name ndn.Name, fw ...Fetchware) []byt
 		h = m(h)
 	}
 	offset := -1
-	for a.next.Components != nil {
+	for a.next != nil {
 		if offset >= a.offset {
 			return nil
 		}
 		offset = a.offset
-		h.ServeNDN(a, &ndn.Interest{Name: a.next})
+		h.ServeNDN(a, &ndn.Interest{Name: ndn.Name{Components: a.next}})
 	}
 	t := f.fw
 	for _, m := range fw {
