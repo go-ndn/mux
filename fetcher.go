@@ -51,8 +51,8 @@ func (f *Fetcher) UseVerifier(v Verifier) {
 
 func sha256Verifier(d *ndn.Data) bool {
 	switch d.SignatureInfo.SignatureType {
-	case ndn.SignatureTypeDigestSha256:
-		digest, err := ndn.NewSha256(d)
+	case ndn.SignatureTypeDigestSHA256:
+		digest, err := ndn.NewSHA256(d)
 		if err != nil {
 			return false
 		}
