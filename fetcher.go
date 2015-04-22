@@ -109,7 +109,10 @@ func (f *Fetcher) Fetch(iw InterestSender, name ndn.Name, fw ...Fetchware) []byt
 		h = m(h)
 	}
 	offset := -1
-	for a.next.Components != nil && offset < a.offset {
+	for a.next.Components != nil {
+		if offset >= a.offset {
+			return nil
+		}
 		offset = a.offset
 		h.ServeNDN(a, &ndn.Interest{Name: a.next})
 	}
