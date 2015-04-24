@@ -108,7 +108,7 @@ func Assembler(next Handler) Handler {
 			index++
 
 			segName := append(name, segNum)
-			if name == nil {
+			if len(name) == 0 {
 				segName = i.Name.Components
 			}
 			ch := make(chan *ndn.Data, 1)
@@ -124,12 +124,12 @@ func Assembler(next Handler) Handler {
 				content = append(content, d.Content...)
 
 				if bytes.Equal(d.Name.Components[len(d.Name.Components)-1], d.MetaInfo.FinalBlockID.Component) {
-					if name == nil {
+					if len(name) == 0 {
 						name = d.Name.Components
 					}
 				} else {
 					last = false
-					if name == nil {
+					if len(name) == 0 {
 						name = d.Name.Components[:len(d.Name.Components)-1]
 					}
 				}
@@ -137,8 +137,16 @@ func Assembler(next Handler) Handler {
 				return
 			}
 		}
+		if len(name) == 0 {
+			return
+		}
 		w.SendData(&ndn.Data{
-			Name:    ndn.Name{Components: name},
+			Name: ndn.Name{Components: name},
+			MetaInfo: ndn.MetaInfo{
+				FinalBlockID: ndn.FinalBlockID{
+					Component: name[len(name)-1],
+				},
+			},
 			Content: content,
 		})
 	})

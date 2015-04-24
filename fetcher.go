@@ -82,7 +82,7 @@ func (f *Fetcher) Fetch(fetcher Sender, name ndn.Name, fw ...Fetchware) []byte {
 		h = m(h)
 	}
 	ch := make(chan *ndn.Data, 1)
-	Assembler(h).ServeNDN(&assembler{Sender: fetcher, ch: ch}, &ndn.Interest{Name: name})
+	h.ServeNDN(&assembler{Sender: fetcher, ch: ch}, &ndn.Interest{Name: name})
 	select {
 	case d := <-ch:
 		t := f.fw
