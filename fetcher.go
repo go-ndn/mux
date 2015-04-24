@@ -2,7 +2,6 @@ package mux
 
 import (
 	"bytes"
-	"encoding/binary"
 
 	"github.com/go-ndn/ndn"
 )
@@ -66,34 +65,9 @@ func sha256Verifier(d *ndn.Data) bool {
 	return true
 }
 
-type assembler struct {
-	InterestSender
-
-	content []byte
-	offset  int
-	next    []ndn.Component
-}
-
-func (a *assembler) SendData(d *ndn.Data) {
-	a.content = append(a.content, d.Content...)
-	a.next = nil
-	if len(d.Name.Components) > 0 &&
-		!bytes.Equal(d.Name.Components[len(d.Name.Components)-1], d.MetaInfo.FinalBlockID.Component) {
-		a.offset += len(d.Content)
-		a.next = make([]ndn.Component, len(d.Name.Components))
-		copy(a.next, d.Name.Components[:len(d.Name.Components)-1])
-		a.next[len(a.next)-1] = make([]byte, 8)
-		binary.BigEndian.PutUint64(a.next[len(a.next)-1], uint64(a.offset))
-	}
-}
-
-func (f *Fetcher) Fetch(iw InterestSender, name ndn.Name, fw ...Fetchware) []byte {
-	a := &assembler{
-		InterestSender: iw,
-		next:           name.Components,
-	}
+func (f *Fetcher) Fetch(fetcher Sender, name ndn.Name, fw ...Fetchware) []byte {
 	h := Handler(HandlerFunc(func(w Sender, i *ndn.Interest) {
-		d, ok := <-iw.SendInterest(i)
+		d, ok := <-fetcher.SendInterest(i)
 		if !ok {
 			return
 		}
@@ -107,17 +81,16 @@ func (f *Fetcher) Fetch(iw InterestSender, name ndn.Name, fw ...Fetchware) []byt
 	for _, m := range f.mw {
 		h = m(h)
 	}
-	offset := -1
-	for a.next != nil {
-		if offset >= a.offset {
-			return nil
+	ch := make(chan *ndn.Data, 1)
+	Assembler(h).ServeNDN(&assembler{Sender: fetcher, ch: ch}, &ndn.Interest{Name: name})
+	select {
+	case d := <-ch:
+		t := f.fw
+		for _, m := range fw {
+			t = m(t)
 		}
-		offset = a.offset
-		h.ServeNDN(a, &ndn.Interest{Name: ndn.Name{Components: a.next}})
+		return t.Transform(d.Content)
+	default:
+		return nil
 	}
-	t := f.fw
-	for _, m := range fw {
-		t = m(t)
-	}
-	return t.Transform(a.content)
 }
