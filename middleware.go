@@ -64,7 +64,7 @@ func (s *segmentor) SendData(d *ndn.Data) {
 				},
 				Content: d.Content[i*s.size : end],
 			}
-			if end+1 > len(d.Content) {
+			if end == len(d.Content) {
 				seg.MetaInfo.FinalBlockID.Component = segNum
 			}
 			s.Sender.SendData(seg)
