@@ -12,17 +12,9 @@ func (f HandlerFunc) ServeNDN(w Sender, i *ndn.Interest) {
 	f(w, i)
 }
 
-type InterestSender interface {
-	SendInterest(*ndn.Interest) <-chan *ndn.Data
-}
-
-type DataSender interface {
-	SendData(*ndn.Data)
-}
-
 type Sender interface {
-	InterestSender
-	DataSender
+	SendInterest(*ndn.Interest) <-chan *ndn.Data
+	SendData(*ndn.Data)
 }
 
 type Middleware func(Handler) Handler

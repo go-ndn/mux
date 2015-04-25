@@ -151,3 +151,26 @@ func Assembler(next Handler) Handler {
 		})
 	})
 }
+
+type sha256Verifier struct {
+	Sender
+}
+
+func (v *sha256Verifier) SendData(d *ndn.Data) {
+	if d.SignatureInfo.SignatureType == ndn.SignatureTypeDigestSHA256 {
+		digest, err := ndn.NewSHA256(d)
+		if err != nil {
+			return
+		}
+		if !bytes.Equal(digest, d.SignatureValue) {
+			return
+		}
+	}
+	v.Sender.SendData(d)
+}
+
+func SHA256Verifier(next Handler) Handler {
+	return HandlerFunc(func(w Sender, i *ndn.Interest) {
+		next.ServeNDN(&sha256Verifier{Sender: w}, i)
+	})
+}
