@@ -97,12 +97,10 @@ func Assembler(next Handler) Handler {
 		var (
 			name    []ndn.Component
 			content []byte
-			last    bool
 			index   int
 		)
-		for !last {
-			last = true
-
+	ASSEMBLE:
+		for {
 			segNum := make([]byte, 8)
 			binary.BigEndian.PutUint64(segNum, uint64(index))
 			index++
@@ -127,8 +125,8 @@ func Assembler(next Handler) Handler {
 					if name == nil {
 						name = d.Name.Components
 					}
+					break ASSEMBLE
 				} else {
-					last = false
 					if name == nil {
 						name = make([]ndn.Component, len(d.Name.Components)-1)
 						copy(name, d.Name.Components)
@@ -138,7 +136,6 @@ func Assembler(next Handler) Handler {
 				return
 			}
 		}
-
 		d := &ndn.Data{
 			Name:    ndn.Name{Components: name},
 			Content: content,
