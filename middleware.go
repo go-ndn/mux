@@ -23,6 +23,10 @@ func (c *cacher) SendData(d *ndn.Data) {
 	ndn.ContentStore.Add(d)
 }
 
+func (c *cacher) Hijack() Sender {
+	return c.Sender
+}
+
 func Cacher(next Handler) Handler {
 	return HandlerFunc(func(w Sender, i *ndn.Interest) {
 		cache := ndn.ContentStore.Get(i)
@@ -74,6 +78,10 @@ func (s *segmentor) SendData(d *ndn.Data) {
 	}
 }
 
+func (s *segmentor) Hijack() Sender {
+	return s.Sender
+}
+
 func Segmentor(size int) Middleware {
 	return func(next Handler) Handler {
 		return HandlerFunc(func(w Sender, i *ndn.Interest) {
@@ -92,6 +100,10 @@ func (a *assembler) SendData(d *ndn.Data) {
 	case a.ch <- d:
 	default:
 	}
+}
+
+func (a *assembler) Hijack() Sender {
+	return a.Sender
 }
 
 func Assembler(next Handler) Handler {
@@ -166,6 +178,10 @@ func (v *sha256Verifier) SendData(d *ndn.Data) {
 	v.Sender.SendData(d)
 }
 
+func (v *sha256Verifier) Hijack() Sender {
+	return v.Sender
+}
+
 func SHA256Verifier(next Handler) Handler {
 	return HandlerFunc(func(w Sender, i *ndn.Interest) {
 		next.ServeNDN(&sha256Verifier{Sender: w}, i)
@@ -180,6 +196,10 @@ type prefixTrimmer struct {
 func (t *prefixTrimmer) SendData(d *ndn.Data) {
 	d.Name.Components = append(t.name, d.Name.Components...)
 	t.Sender.SendData(d)
+}
+
+func (t *prefixTrimmer) Hijack() Sender {
+	return t.Sender
 }
 
 func PrefixTrimmer(prefix string) Middleware {

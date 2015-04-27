@@ -12,9 +12,13 @@ func (f HandlerFunc) ServeNDN(w Sender, i *ndn.Interest) {
 	f(w, i)
 }
 
+type Middleware func(Handler) Handler
+
 type Sender interface {
 	SendInterest(*ndn.Interest) <-chan *ndn.Data
 	SendData(*ndn.Data)
 }
 
-type Middleware func(Handler) Handler
+type Hijacker interface {
+	Hijack() Sender
+}
