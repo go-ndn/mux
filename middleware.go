@@ -4,10 +4,15 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io/ioutil"
+	"path/filepath"
 	"time"
 
 	"github.com/go-ndn/ndn"
 )
+
+// NOTE: When data packet is passed to SendData, it is owned by receiver.
+// Sender may call SendData concurrently only with different data packets.
 
 type cacher struct {
 	Sender
@@ -57,13 +62,10 @@ func (s *segmentor) SendData(d *ndn.Data) {
 			segNum := make([]byte, 8)
 			binary.BigEndian.PutUint64(segNum, uint64(i))
 			seg := &ndn.Data{
-				Name: ndn.Name{Components: append(d.Name.Components, segNum)},
-				MetaInfo: ndn.MetaInfo{
-					ContentType:     d.MetaInfo.ContentType,
-					FreshnessPeriod: d.MetaInfo.FreshnessPeriod,
-				},
+				Name:    ndn.Name{Components: append(d.Name.Components, segNum)},
 				Content: d.Content[i*s.size : end],
 			}
+			seg.MetaInfo = d.MetaInfo
 			if end == len(d.Content) {
 				seg.MetaInfo.FinalBlockID.Component = segNum
 			}
@@ -167,5 +169,48 @@ func (v *sha256Verifier) SendData(d *ndn.Data) {
 func SHA256Verifier(next Handler) Handler {
 	return HandlerFunc(func(w Sender, i *ndn.Interest) {
 		next.ServeNDN(&sha256Verifier{Sender: w}, i)
+	})
+}
+
+type prefixTrimmer struct {
+	Sender
+	name []ndn.Component
+}
+
+func (t *prefixTrimmer) SendData(d *ndn.Data) {
+	d.Name.Components = append(t.name, d.Name.Components...)
+	t.Sender.SendData(d)
+}
+
+func PrefixTrimmer(prefix string) Middleware {
+	name := ndn.NewName(prefix).Components
+	return func(next Handler) Handler {
+		return HandlerFunc(func(w Sender, i *ndn.Interest) {
+			if len(i.Name.Components) < len(name) {
+				return
+			}
+			for index, comp := range name {
+				if !bytes.Equal(comp, i.Name.Components[index]) {
+					return
+				}
+			}
+			orig := i.Name.Components
+			i.Name.Components = i.Name.Components[len(name):]
+			next.ServeNDN(&prefixTrimmer{Sender: w, name: name}, i)
+			i.Name.Components = orig
+		})
+	}
+}
+
+func FileServer(root string) Handler {
+	return HandlerFunc(func(w Sender, i *ndn.Interest) {
+		content, err := ioutil.ReadFile(root + filepath.Clean(i.Name.String()))
+		if err != nil {
+			return
+		}
+		w.SendData(&ndn.Data{
+			Name:    i.Name,
+			Content: content,
+		})
 	})
 }
