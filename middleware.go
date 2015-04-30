@@ -29,11 +29,11 @@ func (c *cacher) Hijack() Sender {
 
 func Cacher(next Handler) Handler {
 	return HandlerFunc(func(w Sender, i *ndn.Interest) {
-		cache := ndn.ContentStore.Get(i)
-		if cache == nil {
+		d := ndn.ContentStore.Get(i)
+		if d == nil {
 			next.ServeNDN(&cacher{Sender: w}, i)
 		} else {
-			w.SendData(cache)
+			w.SendData(d)
 		}
 	})
 }
