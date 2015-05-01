@@ -112,22 +112,23 @@ func Assembler(next Handler) Handler {
 			name    []ndn.Component
 			content []byte
 			index   int
+			ch      = make(chan *ndn.Data, 1)
+			a       = &assembler{Sender: w, ch: ch}
+			orig    = i.Name.Components
 		)
+		defer func() {
+			i.Name.Components = orig
+		}()
 	ASSEMBLE:
 		for {
 			segNum := make([]byte, 8)
 			binary.BigEndian.PutUint64(segNum, uint64(index))
 			index++
 
-			segName := i.Name.Components
 			if name != nil {
-				segName = append(name, segNum)
+				i.Name.Components = append(name, segNum)
 			}
-			ch := make(chan *ndn.Data, 1)
-			next.ServeNDN(
-				&assembler{Sender: w, ch: ch},
-				&ndn.Interest{Name: ndn.Name{Components: segName}},
-			)
+			next.ServeNDN(a, i)
 			select {
 			case d := <-ch:
 				if len(d.Name.Components) == 0 {
