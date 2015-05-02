@@ -2,10 +2,10 @@ package mux
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"io/ioutil"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/go-ndn/ndn"
@@ -63,8 +63,7 @@ func (s *segmentor) SendData(d *ndn.Data) {
 			if end > len(d.Content) {
 				end = len(d.Content)
 			}
-			segNum := make([]byte, 8)
-			binary.BigEndian.PutUint64(segNum, uint64(i))
+			segNum := []byte(strconv.Itoa(i))
 			seg := &ndn.Data{
 				Name:    ndn.Name{Components: append(d.Name.Components, segNum)},
 				Content: d.Content[i*s.size : end],
@@ -121,13 +120,11 @@ func Assembler(next Handler) Handler {
 		}()
 	ASSEMBLE:
 		for {
-			segNum := make([]byte, 8)
-			binary.BigEndian.PutUint64(segNum, uint64(index))
+			if name != nil {
+				i.Name.Components = append(name, []byte(strconv.Itoa(index)))
+			}
 			index++
 
-			if name != nil {
-				i.Name.Components = append(name, segNum)
-			}
 			next.ServeNDN(a, i)
 			select {
 			case d := <-ch:
