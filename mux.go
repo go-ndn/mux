@@ -16,11 +16,11 @@ func (mux *Mux) Use(m Middleware) {
 	mux.mw = m(mux.mw)
 }
 
-func (mux *Mux) ServeNDN(w Sender, i *ndn.Interest) {
+func (mux *Mux) ServeNDN(w ndn.Sender, i *ndn.Interest) {
 	mux.mw.ServeNDN(w, i)
 }
 
-func (mux *Mux) Run(w Sender, ch <-chan *ndn.Interest) {
+func (mux *Mux) Run(w ndn.Sender, ch <-chan *ndn.Interest) {
 	for i := range ch {
 		go mux.ServeNDN(w, i)
 	}

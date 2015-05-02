@@ -14,8 +14,8 @@ func (f *Fetcher) Use(m Middleware) {
 	f.mw = append(f.mw, m)
 }
 
-func (f *Fetcher) Fetch(fetcher Sender, name ndn.Name, mw ...Middleware) []byte {
-	h := Handler(HandlerFunc(func(w Sender, i *ndn.Interest) {
+func (f *Fetcher) Fetch(fetcher ndn.Sender, name ndn.Name, mw ...Middleware) []byte {
+	h := Handler(HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
 		d, ok := <-fetcher.SendInterest(i)
 		if !ok {
 			return

@@ -15,7 +15,7 @@ import (
 // Sender may call SendData concurrently only with different data packets.
 
 type cacher struct {
-	Sender
+	ndn.Sender
 }
 
 func (c *cacher) SendData(d *ndn.Data) {
@@ -23,12 +23,12 @@ func (c *cacher) SendData(d *ndn.Data) {
 	ndn.ContentStore.Add(d)
 }
 
-func (c *cacher) Hijack() Sender {
+func (c *cacher) Hijack() ndn.Sender {
 	return c.Sender
 }
 
 func Cacher(next Handler) Handler {
-	return HandlerFunc(func(w Sender, i *ndn.Interest) {
+	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
 		d := ndn.ContentStore.Get(i)
 		if d == nil {
 			next.ServeNDN(&cacher{Sender: w}, i)
@@ -39,7 +39,7 @@ func Cacher(next Handler) Handler {
 }
 
 func Logger(next Handler) Handler {
-	return HandlerFunc(func(w Sender, i *ndn.Interest) {
+	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
 		before := time.Now()
 		next.ServeNDN(w, i)
 		fmt.Printf("%s completed in %s\n", i.Name, time.Now().Sub(before))
@@ -47,7 +47,7 @@ func Logger(next Handler) Handler {
 }
 
 type segmentor struct {
-	Sender
+	ndn.Sender
 	size int
 }
 
@@ -77,20 +77,20 @@ func (s *segmentor) SendData(d *ndn.Data) {
 	}
 }
 
-func (s *segmentor) Hijack() Sender {
+func (s *segmentor) Hijack() ndn.Sender {
 	return s.Sender
 }
 
 func Segmentor(size int) Middleware {
 	return func(next Handler) Handler {
-		return HandlerFunc(func(w Sender, i *ndn.Interest) {
+		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
 			next.ServeNDN(&segmentor{Sender: w, size: size}, i)
 		})
 	}
 }
 
 type assembler struct {
-	Sender
+	ndn.Sender
 	ch chan<- *ndn.Data
 }
 
@@ -101,12 +101,12 @@ func (a *assembler) SendData(d *ndn.Data) {
 	}
 }
 
-func (a *assembler) Hijack() Sender {
+func (a *assembler) Hijack() ndn.Sender {
 	return a.Sender
 }
 
 func Assembler(next Handler) Handler {
-	return HandlerFunc(func(w Sender, i *ndn.Interest) {
+	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
 		var (
 			name    []ndn.Component
 			content []byte
@@ -160,7 +160,7 @@ func Assembler(next Handler) Handler {
 }
 
 type sha256Verifier struct {
-	Sender
+	ndn.Sender
 }
 
 func (v *sha256Verifier) SendData(d *ndn.Data) {
@@ -176,18 +176,18 @@ func (v *sha256Verifier) SendData(d *ndn.Data) {
 	v.Sender.SendData(d)
 }
 
-func (v *sha256Verifier) Hijack() Sender {
+func (v *sha256Verifier) Hijack() ndn.Sender {
 	return v.Sender
 }
 
 func SHA256Verifier(next Handler) Handler {
-	return HandlerFunc(func(w Sender, i *ndn.Interest) {
+	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
 		next.ServeNDN(&sha256Verifier{Sender: w}, i)
 	})
 }
 
 type prefixTrimmer struct {
-	Sender
+	ndn.Sender
 	name []ndn.Component
 }
 
@@ -196,14 +196,14 @@ func (t *prefixTrimmer) SendData(d *ndn.Data) {
 	t.Sender.SendData(d)
 }
 
-func (t *prefixTrimmer) Hijack() Sender {
+func (t *prefixTrimmer) Hijack() ndn.Sender {
 	return t.Sender
 }
 
 func PrefixTrimmer(prefix string) Middleware {
 	name := ndn.NewName(prefix).Components
 	return func(next Handler) Handler {
-		return HandlerFunc(func(w Sender, i *ndn.Interest) {
+		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
 			if len(i.Name.Components) < len(name) {
 				return
 			}
@@ -221,7 +221,7 @@ func PrefixTrimmer(prefix string) Middleware {
 }
 
 func FileServer(root string) Handler {
-	return HandlerFunc(func(w Sender, i *ndn.Interest) {
+	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
 		content, err := ioutil.ReadFile(root + filepath.Clean(i.Name.String()))
 		if err != nil {
 			return
