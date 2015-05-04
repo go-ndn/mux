@@ -59,10 +59,12 @@ func (s *segmentor) SendData(d *ndn.Data) {
 		}
 		segNum := bytes.NewBuffer([]byte{0x00})
 		tlv.WriteVarNum(segNum, uint64(i))
-		seg := &ndn.Data{
-			Name:    ndn.Name{Components: append(d.Name.Components, segNum.Bytes())},
-			Content: d.Content[i*s.size : end],
-		}
+
+		seg := new(ndn.Data)
+		seg.Name.Components = make([]ndn.Component, len(d.Name.Components)+1)
+		copy(seg.Name.Components, d.Name.Components)
+		seg.Name.Components[len(seg.Name.Components)-1] = segNum.Bytes()
+		seg.Content = d.Content[i*s.size : end]
 		seg.MetaInfo = d.MetaInfo
 		if end == len(d.Content) {
 			seg.MetaInfo.FinalBlockID.Component = segNum.Bytes()
@@ -104,24 +106,25 @@ func Assembler(next Handler) Handler {
 		var (
 			name    []ndn.Component
 			content []byte
+			seg     = i
 			index   uint64
 			ch      = make(chan *ndn.Data, 1)
 			a       = &assembler{Sender: w, ch: ch}
-			orig    = i.Name.Components
 		)
-		defer func() {
-			i.Name.Components = orig
-		}()
 	ASSEMBLE:
 		for {
 			if name != nil {
 				segNum := bytes.NewBuffer([]byte{0x00})
 				tlv.WriteVarNum(segNum, index)
-				i.Name.Components = append(name, segNum.Bytes())
+
+				seg = new(ndn.Interest)
+				seg.Name.Components = make([]ndn.Component, len(name)+1)
+				copy(seg.Name.Components, name)
+				seg.Name.Components[len(name)] = segNum.Bytes()
 			}
 			index++
 
-			next.ServeNDN(a, i)
+			next.ServeNDN(a, seg)
 			select {
 			case d := <-ch:
 				if len(d.Name.Components) == 0 {
@@ -188,7 +191,10 @@ type prefixTrimmer struct {
 }
 
 func (t *prefixTrimmer) SendData(d *ndn.Data) {
-	d.Name.Components = append(t.name, d.Name.Components...)
+	name := make([]ndn.Component, len(t.name)+len(d.Name.Components))
+	copy(name, t.name)
+	copy(name[len(t.name):], d.Name.Components)
+	d.Name.Components = name
 	t.Sender.SendData(d)
 }
 
