@@ -19,8 +19,8 @@ type cacher struct {
 }
 
 func (c *cacher) SendData(d *ndn.Data) {
-	c.Sender.SendData(d)
 	ndn.ContentStore.Add(d)
+	c.Sender.SendData(d)
 }
 
 func (c *cacher) Hijack() ndn.Sender {
