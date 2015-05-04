@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"io/ioutil"
 	"path/filepath"
-	"strconv"
 	"time"
 
 	"github.com/go-ndn/ndn"
+	"github.com/go-ndn/tlv"
 )
 
 // NOTE: When data packet is passed to SendData, it is owned by receiver.
@@ -52,28 +52,22 @@ type segmentor struct {
 }
 
 func (s *segmentor) SendData(d *ndn.Data) {
-	if len(d.Content) <= s.size {
-		if len(d.Name.Components) > 0 {
-			d.MetaInfo.FinalBlockID.Component = d.Name.Components[len(d.Name.Components)-1]
+	for i := 0; i == 0 || i*s.size < len(d.Content); i++ {
+		end := (i + 1) * s.size
+		if end > len(d.Content) {
+			end = len(d.Content)
 		}
-		s.Sender.SendData(d)
-	} else {
-		for i := 0; i*s.size < len(d.Content); i++ {
-			end := (i + 1) * s.size
-			if end > len(d.Content) {
-				end = len(d.Content)
-			}
-			segNum := []byte(strconv.Itoa(i))
-			seg := &ndn.Data{
-				Name:    ndn.Name{Components: append(d.Name.Components, segNum)},
-				Content: d.Content[i*s.size : end],
-			}
-			seg.MetaInfo = d.MetaInfo
-			if end == len(d.Content) {
-				seg.MetaInfo.FinalBlockID.Component = segNum
-			}
-			s.Sender.SendData(seg)
+		segNum := bytes.NewBuffer([]byte{0x00})
+		tlv.WriteVarNum(segNum, uint64(i))
+		seg := &ndn.Data{
+			Name:    ndn.Name{Components: append(d.Name.Components, segNum.Bytes())},
+			Content: d.Content[i*s.size : end],
 		}
+		seg.MetaInfo = d.MetaInfo
+		if end == len(d.Content) {
+			seg.MetaInfo.FinalBlockID.Component = segNum.Bytes()
+		}
+		s.Sender.SendData(seg)
 	}
 }
 
@@ -110,7 +104,7 @@ func Assembler(next Handler) Handler {
 		var (
 			name    []ndn.Component
 			content []byte
-			index   int
+			index   uint64
 			ch      = make(chan *ndn.Data, 1)
 			a       = &assembler{Sender: w, ch: ch}
 			orig    = i.Name.Components
@@ -121,7 +115,9 @@ func Assembler(next Handler) Handler {
 	ASSEMBLE:
 		for {
 			if name != nil {
-				i.Name.Components = append(name, []byte(strconv.Itoa(index)))
+				segNum := bytes.NewBuffer([]byte{0x00})
+				tlv.WriteVarNum(segNum, index)
+				i.Name.Components = append(name, segNum.Bytes())
 			}
 			index++
 
