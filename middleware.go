@@ -42,7 +42,7 @@ func Logger(next Handler) Handler {
 	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
 		before := time.Now()
 		next.ServeNDN(w, i)
-		fmt.Printf("%s completed in %s\n", i.Name, time.Now().Sub(before))
+		fmt.Printf("%s completed in %s\n", i.Name, time.Since(before))
 	})
 }
 
