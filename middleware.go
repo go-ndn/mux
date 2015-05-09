@@ -139,8 +139,7 @@ func Assembler(next Handler) Handler {
 					break ASSEMBLE
 				} else {
 					if name == nil {
-						name = make([]ndn.Component, len(d.Name.Components)-1)
-						copy(name, d.Name.Components)
+						name = d.Name.Components[:len(d.Name.Components)-1]
 					}
 				}
 			default:
