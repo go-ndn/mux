@@ -2,6 +2,9 @@ package mux
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"fmt"
 	"io/ioutil"
 	"path/filepath"
@@ -232,4 +235,69 @@ func FileServer(root string) Handler {
 			Content: content,
 		})
 	})
+}
+
+type aesEncryptor struct {
+	block cipher.Block
+	ndn.Sender
+}
+
+func (enc *aesEncryptor) SendData(d *ndn.Data) {
+	ciphertext := make([]byte, aes.BlockSize+len(d.Content))
+	iv := ciphertext[:aes.BlockSize]
+	rand.Read(iv)
+	stream := cipher.NewCTR(enc.block, iv)
+	stream.XORKeyStream(ciphertext[aes.BlockSize:], d.Content)
+	d.Content = ciphertext
+	enc.Sender.SendData(d)
+}
+
+func (enc *aesEncryptor) Hijack() ndn.Sender {
+	return enc.Sender
+}
+
+func AESEncryptor(key []byte) Middleware {
+	block, err := aes.NewCipher(key)
+	return func(next Handler) Handler {
+		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+			next.ServeNDN(&aesEncryptor{Sender: w, block: block}, i)
+		})
+	}
+}
+
+type aesDecryptor struct {
+	block cipher.Block
+	ndn.Sender
+}
+
+func (dec *aesDecryptor) SendData(d *ndn.Data) {
+	if len(d.Content) < aes.BlockSize {
+		return
+	}
+	plaintext := make([]byte, len(d.Content)-aes.BlockSize)
+	stream := cipher.NewCTR(dec.block, d.Content[:aes.BlockSize])
+	stream.XORKeyStream(plaintext, d.Content[aes.BlockSize:])
+	d.Content = plaintext
+	dec.Sender.SendData(d)
+}
+
+func (dec *aesDecryptor) Hijack() ndn.Sender {
+	return dec.Sender
+}
+
+func AESDecryptor(key []byte) Middleware {
+	block, err := aes.NewCipher(key)
+	return func(next Handler) Handler {
+		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+			next.ServeNDN(&aesDecryptor{Sender: w, block: block}, i)
+		})
+	}
 }
