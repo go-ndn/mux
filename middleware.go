@@ -2,6 +2,7 @@ package mux
 
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/go-ndn/ndn"
 	"github.com/go-ndn/tlv"
 )
@@ -41,10 +43,23 @@ func Cacher(next Handler) Handler {
 	})
 }
 
+type logger struct {
+	ndn.Sender
+}
+
+func (l *logger) SendData(d *ndn.Data) {
+	spew.Dump(d)
+	l.Sender.SendData(d)
+}
+
+func (l *logger) Hijack() ndn.Sender {
+	return l.Sender
+}
+
 func Logger(next Handler) Handler {
 	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
 		before := time.Now()
-		next.ServeNDN(w, i)
+		next.ServeNDN(&logger{Sender: w}, i)
 		fmt.Printf("%s completed in %s\n", i.Name, time.Since(before))
 	})
 }
@@ -300,4 +315,49 @@ func AESDecryptor(key []byte) Middleware {
 			next.ServeNDN(&aesDecryptor{Sender: w, block: block}, i)
 		})
 	}
+}
+
+type gzipper struct {
+	ndn.Sender
+}
+
+func (gz *gzipper) SendData(d *ndn.Data) {
+	buf := new(bytes.Buffer)
+	gzw := gzip.NewWriter(buf)
+	gzw.Write(d.Content)
+	gzw.Close()
+	d.Content = buf.Bytes()
+	gz.Sender.SendData(d)
+}
+
+func (gz *gzipper) Hijack() ndn.Sender {
+	return gz.Sender
+}
+
+func Gzipper(next Handler) Handler {
+	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+		next.ServeNDN(&gzipper{Sender: w}, i)
+	})
+}
+
+type gunzipper struct {
+	ndn.Sender
+}
+
+func (gz *gunzipper) SendData(d *ndn.Data) {
+	buf := new(bytes.Buffer)
+	gzr, _ := gzip.NewReader(bytes.NewReader(d.Content))
+	buf.ReadFrom(gzr)
+	d.Content = buf.Bytes()
+	gz.Sender.SendData(d)
+}
+
+func (gz *gunzipper) Hijack() ndn.Sender {
+	return gz.Sender
+}
+
+func Gunzipper(next Handler) Handler {
+	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+		next.ServeNDN(&gunzipper{Sender: w}, i)
+	})
 }
