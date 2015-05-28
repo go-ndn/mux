@@ -346,7 +346,11 @@ type gunzipper struct {
 
 func (gz *gunzipper) SendData(d *ndn.Data) {
 	buf := new(bytes.Buffer)
-	gzr, _ := gzip.NewReader(bytes.NewReader(d.Content))
+	gzr, err := gzip.NewReader(bytes.NewReader(d.Content))
+	if err != nil {
+		return
+	}
+	defer gzr.Close()
 	buf.ReadFrom(gzr)
 	d.Content = buf.Bytes()
 	gz.Sender.SendData(d)
