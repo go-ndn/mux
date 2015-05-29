@@ -16,8 +16,9 @@ import (
 	"github.com/go-ndn/tlv"
 )
 
-// NOTE: When data packet is passed to SendData, it is owned by receiver.
-// Sender may call SendData concurrently only with different data packets.
+// NOTE:
+// 1. When data packet is passed to SendData, it is owned by receiver.
+// 2. Sender may call SendData zero or one time.
 
 type cacher struct {
 	ndn.Sender
@@ -105,14 +106,11 @@ func Segmentor(size int) Middleware {
 
 type assembler struct {
 	ndn.Sender
-	ch chan<- *ndn.Data
+	data *ndn.Data
 }
 
 func (a *assembler) SendData(d *ndn.Data) {
-	select {
-	case a.ch <- d:
-	default:
-	}
+	a.data = d
 }
 
 func (a *assembler) Hijack() ndn.Sender {
@@ -124,13 +122,10 @@ func Assembler(next Handler) Handler {
 		var (
 			name    []ndn.Component
 			content []byte
-			seg     = i
 			index   uint64
-			ch      = make(chan *ndn.Data, 1)
-			a       = &assembler{Sender: w, ch: ch}
 		)
-	ASSEMBLE:
 		for {
+			seg := i
 			if name != nil {
 				segNum := bytes.NewBuffer([]byte{0x00})
 				tlv.WriteVarNum(segNum, index)
@@ -142,26 +137,27 @@ func Assembler(next Handler) Handler {
 			}
 			index++
 
+			a := &assembler{Sender: w}
 			next.ServeNDN(a, seg)
-			select {
-			case d := <-ch:
-				if len(d.Name.Components) == 0 {
-					return
-				}
-				content = append(content, d.Content...)
-
-				if bytes.Equal(d.Name.Components[len(d.Name.Components)-1], d.MetaInfo.FinalBlockID.Component) {
-					if name == nil {
-						name = d.Name.Components
-					}
-					break ASSEMBLE
-				} else {
-					if name == nil {
-						name = d.Name.Components[:len(d.Name.Components)-1]
-					}
-				}
-			default:
+			if a.data == nil {
 				return
+			}
+			d := a.data
+
+			if len(d.Name.Components) == 0 {
+				return
+			}
+			content = append(content, d.Content...)
+
+			if bytes.Equal(d.Name.Components[len(d.Name.Components)-1], d.MetaInfo.FinalBlockID.Component) {
+				if name == nil {
+					name = d.Name.Components
+				}
+				break
+			} else {
+				if name == nil {
+					name = d.Name.Components[:len(d.Name.Components)-1]
+				}
 			}
 		}
 		d := &ndn.Data{

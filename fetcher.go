@@ -14,9 +14,9 @@ func (f *Fetcher) Use(m Middleware) {
 	f.mw = append(f.mw, m)
 }
 
-func (f *Fetcher) Fetch(from ndn.Sender, i *ndn.Interest, mw ...Middleware) []byte {
+func (f *Fetcher) Fetch(w ndn.Sender, i *ndn.Interest, mw ...Middleware) []byte {
 	h := Handler(HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-		d, ok := <-from.SendInterest(i)
+		d, ok := <-w.SendInterest(i)
 		if !ok {
 			return
 		}
@@ -28,12 +28,10 @@ func (f *Fetcher) Fetch(from ndn.Sender, i *ndn.Interest, mw ...Middleware) []by
 	for _, m := range mw {
 		h = m(h)
 	}
-	ch := make(chan *ndn.Data, 1)
-	h.ServeNDN(&assembler{Sender: from, ch: ch}, i)
-	select {
-	case d := <-ch:
-		return d.Content
-	default:
+	a := &assembler{Sender: w}
+	h.ServeNDN(a, i)
+	if a.data == nil {
 		return nil
 	}
+	return a.data.Content
 }
