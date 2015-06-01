@@ -59,6 +59,7 @@ func (l *logger) Hijack() ndn.Sender {
 
 func Logger(next Handler) Handler {
 	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+		spew.Dump(i)
 		before := time.Now()
 		next.ServeNDN(&logger{Sender: w}, i)
 		fmt.Printf("%s completed in %s\n", i.Name, time.Since(before))
