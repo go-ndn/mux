@@ -6,7 +6,9 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"fmt"
+	"hash"
 	"io/ioutil"
 	"path/filepath"
 	"time"
@@ -172,30 +174,38 @@ func Assembler(next Handler) Handler {
 	})
 }
 
-type sha256Verifier struct {
+type basicVerifier struct {
 	ndn.Sender
 }
 
-func (v *sha256Verifier) SendData(d *ndn.Data) {
-	if d.SignatureInfo.SignatureType == ndn.SignatureTypeDigestSHA256 {
-		digest, err := ndn.NewSHA256(d)
-		if err != nil {
-			return
-		}
-		if !bytes.Equal(digest, d.SignatureValue) {
-			return
-		}
+func (v *basicVerifier) SendData(d *ndn.Data) {
+	var f func() hash.Hash
+	switch d.SignatureInfo.SignatureType {
+	case ndn.SignatureTypeDigestSHA256:
+		f = sha256.New
+	case ndn.SignatureTypeDigestCRC32C:
+		f = ndn.NewCRC32C
+	default:
+		v.Sender.SendData(d)
+		return
+	}
+	digest, err := tlv.Hash(f, d)
+	if err != nil {
+		return
+	}
+	if !bytes.Equal(digest, d.SignatureValue) {
+		return
 	}
 	v.Sender.SendData(d)
 }
 
-func (v *sha256Verifier) Hijack() ndn.Sender {
+func (v *basicVerifier) Hijack() ndn.Sender {
 	return v.Sender
 }
 
-func SHA256Verifier(next Handler) Handler {
+func BasicVerifier(next Handler) Handler {
 	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-		next.ServeNDN(&sha256Verifier{Sender: w}, i)
+		next.ServeNDN(&basicVerifier{Sender: w}, i)
 	})
 }
 
