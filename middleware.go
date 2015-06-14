@@ -11,16 +11,13 @@ import (
 	"hash"
 	"io/ioutil"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/go-ndn/ndn"
 	"github.com/go-ndn/tlv"
 )
-
-// NOTE:
-// 1. When data packet is passed to SendData, it is owned by receiver.
-// 2. Sender may call SendData zero or one time.
 
 type cacher struct {
 	ndn.Sender
@@ -74,6 +71,7 @@ type segmentor struct {
 }
 
 func (s *segmentor) SendData(d *ndn.Data) {
+	l := d.Name.Len()
 	for i := 0; i == 0 || i*s.size < len(d.Content); i++ {
 		end := (i + 1) * s.size
 		if end > len(d.Content) {
@@ -82,12 +80,18 @@ func (s *segmentor) SendData(d *ndn.Data) {
 		segNum := bytes.NewBuffer([]byte{0x00})
 		tlv.WriteVarNum(segNum, uint64(i))
 
-		seg := new(ndn.Data)
-		seg.Name.Components = make([]ndn.Component, len(d.Name.Components)+1)
+		seg := &ndn.Data{
+			MetaInfo: ndn.MetaInfo{
+				ContentType:     d.MetaInfo.ContentType,
+				FreshnessPeriod: d.MetaInfo.FreshnessPeriod,
+				EncryptionType:  d.MetaInfo.EncryptionType,
+				CompressionType: d.MetaInfo.CompressionType,
+			},
+			Content: d.Content[i*s.size : end],
+		}
+		seg.Name.Components = make([]ndn.Component, l+1)
 		copy(seg.Name.Components, d.Name.Components)
-		seg.Name.Components[len(seg.Name.Components)-1] = segNum.Bytes()
-		seg.Content = d.Content[i*s.size : end]
-		seg.MetaInfo = d.MetaInfo
+		seg.Name.Components[l] = segNum.Bytes()
 		if end == len(d.Content) {
 			seg.MetaInfo.FinalBlockID.Component = segNum.Bytes()
 		}
@@ -122,55 +126,64 @@ func (a *assembler) Hijack() ndn.Sender {
 
 func Assembler(next Handler) Handler {
 	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-		var (
-			name    []ndn.Component
-			content []byte
-			index   uint64
-		)
-		for {
-			seg := i
-			if name != nil {
-				segNum := bytes.NewBuffer([]byte{0x00})
-				tlv.WriteVarNum(segNum, index)
+		buf := new(ndn.Data)
 
-				seg = new(ndn.Interest)
-				seg.Name.Components = make([]ndn.Component, len(name)+1)
-				copy(seg.Name.Components, name)
-				seg.Name.Components[len(name)] = segNum.Bytes()
-			}
-			index++
-
+		var fetch func(*ndn.Interest)
+		fetch = func(i *ndn.Interest) {
 			a := &assembler{Sender: w}
-			next.ServeNDN(a, seg)
+			next.ServeNDN(a, i)
 			if a.data == nil {
 				return
 			}
-			d := a.data
-
-			if len(d.Name.Components) == 0 {
+			l := a.data.Name.Len()
+			if l == 0 {
 				return
 			}
-			content = append(content, d.Content...)
 
-			if bytes.Equal(d.Name.Components[len(d.Name.Components)-1], d.MetaInfo.FinalBlockID.Component) {
-				if name == nil {
-					name = d.Name.Components
+			buf.Content = append(buf.Content, a.data.Content...)
+
+			last := a.data.Name.Components[l-1]
+			finalBlockID := a.data.MetaInfo.FinalBlockID.Component
+
+			if len(finalBlockID) > 0 &&
+				bytes.Compare(last, finalBlockID) >= 0 {
+				// final block
+				buf.Name.Components = a.data.Name.Components[:l-1]
+				buf.MetaInfo = ndn.MetaInfo{
+					ContentType:     a.data.MetaInfo.ContentType,
+					FreshnessPeriod: a.data.MetaInfo.FreshnessPeriod,
+					EncryptionType:  a.data.MetaInfo.EncryptionType,
+					CompressionType: a.data.MetaInfo.CompressionType,
 				}
-				break
-			} else {
-				if name == nil {
-					name = d.Name.Components[:len(d.Name.Components)-1]
+
+				if l > 1 {
+					buf.MetaInfo.FinalBlockID.Component = buf.Name.Components[l-2]
 				}
+				return
 			}
+
+			// prepare interest for next block
+			segNum := bytes.NewBuffer(last)
+			b, err := segNum.ReadByte()
+			if err != nil || b != 0x00 {
+				return
+			}
+			index, err := tlv.ReadVarNum(segNum)
+			if err != nil {
+				return
+			}
+
+			segNum.WriteByte(0x00)
+			tlv.WriteVarNum(segNum, index+1)
+			seg := new(ndn.Interest)
+			seg.Name.Components = make([]ndn.Component, l)
+			copy(seg.Name.Components, a.data.Name.Components[:l-1])
+			seg.Name.Components[l-1] = segNum.Bytes()
+
+			fetch(seg)
 		}
-		d := &ndn.Data{
-			Name:    ndn.Name{Components: name},
-			Content: content,
-		}
-		if len(name) > 0 {
-			d.MetaInfo.FinalBlockID.Component = name[len(name)-1]
-		}
-		w.SendData(d)
+		fetch(i)
+		w.SendData(buf)
 	})
 }
 
@@ -209,46 +222,13 @@ func BasicVerifier(next Handler) Handler {
 	})
 }
 
-type prefixTrimmer struct {
-	ndn.Sender
-	name []ndn.Component
-}
-
-func (t *prefixTrimmer) SendData(d *ndn.Data) {
-	name := make([]ndn.Component, len(t.name)+len(d.Name.Components))
-	copy(name, t.name)
-	copy(name[len(t.name):], d.Name.Components)
-	d.Name.Components = name
-	t.Sender.SendData(d)
-}
-
-func (t *prefixTrimmer) Hijack() ndn.Sender {
-	return t.Sender
-}
-
-func PrefixTrimmer(prefix string) Middleware {
-	name := ndn.NewName(prefix).Components
-	return func(next Handler) Handler {
-		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-			if len(i.Name.Components) < len(name) {
-				return
-			}
-			for index, comp := range name {
-				if !bytes.Equal(comp, i.Name.Components[index]) {
-					return
-				}
-			}
-			orig := i.Name.Components
-			i.Name.Components = i.Name.Components[len(name):]
-			next.ServeNDN(&prefixTrimmer{Sender: w, name: name}, i)
-			i.Name.Components = orig
-		})
-	}
-}
-
-func FileServer(root string) Handler {
+func FileServer(from, to string) Handler {
 	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-		content, err := ioutil.ReadFile(root + filepath.Clean(i.Name.String()))
+		path := i.Name.String()
+		if !strings.HasPrefix(path, from) {
+			return
+		}
+		content, err := ioutil.ReadFile(to + filepath.Clean(strings.TrimPrefix(path, from)))
 		if err != nil {
 			return
 		}
@@ -265,13 +245,27 @@ type aesEncryptor struct {
 }
 
 func (enc *aesEncryptor) SendData(d *ndn.Data) {
+	if d.MetaInfo.EncryptionType != ndn.EncryptionTypeNone {
+		enc.Sender.SendData(d)
+		return
+	}
 	ciphertext := make([]byte, aes.BlockSize+len(d.Content))
 	iv := ciphertext[:aes.BlockSize]
 	rand.Read(iv)
 	stream := cipher.NewCTR(enc.block, iv)
 	stream.XORKeyStream(ciphertext[aes.BlockSize:], d.Content)
-	d.Content = ciphertext
-	enc.Sender.SendData(d)
+
+	enc.Sender.SendData(&ndn.Data{
+		Name: d.Name,
+		MetaInfo: ndn.MetaInfo{
+			ContentType:     d.MetaInfo.ContentType,
+			FreshnessPeriod: d.MetaInfo.FreshnessPeriod,
+			FinalBlockID:    d.MetaInfo.FinalBlockID,
+			EncryptionType:  ndn.EncryptionTypeAESWithCTR,
+			CompressionType: d.MetaInfo.CompressionType,
+		},
+		Content: ciphertext,
+	})
 }
 
 func (enc *aesEncryptor) Hijack() ndn.Sender {
@@ -297,14 +291,28 @@ type aesDecryptor struct {
 }
 
 func (dec *aesDecryptor) SendData(d *ndn.Data) {
+	if d.MetaInfo.EncryptionType != ndn.EncryptionTypeAESWithCTR {
+		dec.Sender.SendData(d)
+		return
+	}
 	if len(d.Content) < aes.BlockSize {
 		return
 	}
 	plaintext := make([]byte, len(d.Content)-aes.BlockSize)
 	stream := cipher.NewCTR(dec.block, d.Content[:aes.BlockSize])
 	stream.XORKeyStream(plaintext, d.Content[aes.BlockSize:])
-	d.Content = plaintext
-	dec.Sender.SendData(d)
+
+	dec.Sender.SendData(&ndn.Data{
+		Name: d.Name,
+		MetaInfo: ndn.MetaInfo{
+			ContentType:     d.MetaInfo.ContentType,
+			FreshnessPeriod: d.MetaInfo.FreshnessPeriod,
+			FinalBlockID:    d.MetaInfo.FinalBlockID,
+			EncryptionType:  ndn.EncryptionTypeNone,
+			CompressionType: d.MetaInfo.CompressionType,
+		},
+		Content: plaintext,
+	})
 }
 
 func (dec *aesDecryptor) Hijack() ndn.Sender {
@@ -329,12 +337,26 @@ type gzipper struct {
 }
 
 func (gz *gzipper) SendData(d *ndn.Data) {
+	if d.MetaInfo.CompressionType != ndn.CompressionTypeNone {
+		gz.Sender.SendData(d)
+		return
+	}
 	buf := new(bytes.Buffer)
 	gzw := gzip.NewWriter(buf)
 	gzw.Write(d.Content)
 	gzw.Close()
-	d.Content = buf.Bytes()
-	gz.Sender.SendData(d)
+
+	gz.Sender.SendData(&ndn.Data{
+		Name: d.Name,
+		MetaInfo: ndn.MetaInfo{
+			ContentType:     d.MetaInfo.ContentType,
+			FreshnessPeriod: d.MetaInfo.FreshnessPeriod,
+			FinalBlockID:    d.MetaInfo.FinalBlockID,
+			EncryptionType:  d.MetaInfo.EncryptionType,
+			CompressionType: ndn.CompressionTypeGZIP,
+		},
+		Content: buf.Bytes(),
+	})
 }
 
 func (gz *gzipper) Hijack() ndn.Sender {
@@ -352,6 +374,10 @@ type gunzipper struct {
 }
 
 func (gz *gunzipper) SendData(d *ndn.Data) {
+	if d.MetaInfo.CompressionType != ndn.CompressionTypeGZIP {
+		gz.Sender.SendData(d)
+		return
+	}
 	buf := new(bytes.Buffer)
 	gzr, err := gzip.NewReader(bytes.NewReader(d.Content))
 	if err != nil {
@@ -359,8 +385,18 @@ func (gz *gunzipper) SendData(d *ndn.Data) {
 	}
 	defer gzr.Close()
 	buf.ReadFrom(gzr)
-	d.Content = buf.Bytes()
-	gz.Sender.SendData(d)
+
+	gz.Sender.SendData(&ndn.Data{
+		Name: d.Name,
+		MetaInfo: ndn.MetaInfo{
+			ContentType:     d.MetaInfo.ContentType,
+			FreshnessPeriod: d.MetaInfo.FreshnessPeriod,
+			FinalBlockID:    d.MetaInfo.FinalBlockID,
+			EncryptionType:  d.MetaInfo.EncryptionType,
+			CompressionType: ndn.CompressionTypeNone,
+		},
+		Content: buf.Bytes(),
+	})
 }
 
 func (gz *gunzipper) Hijack() ndn.Sender {

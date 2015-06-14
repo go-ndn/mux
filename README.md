@@ -11,7 +11,6 @@ A light-weight NDN application framework that is inspired by [express](https://g
 * Segmentor
 * Assembler
 * BasicVerifier
-* PrefixTrimmer
 * FileServer
 * AESEncryptor
 * AESDecryptor
