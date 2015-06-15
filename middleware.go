@@ -65,6 +65,27 @@ func Logger(next Handler) Handler {
 	})
 }
 
+func readSegNum(b []byte) (v uint64, err error) {
+	r := bytes.NewReader(b)
+	t, err := r.ReadByte()
+	if err != nil || t != 0x00 {
+		err = tlv.ErrUnexpectedType
+		return
+	}
+	v, err = tlv.ReadVarNum(r)
+	return
+}
+
+func writeSegNum(v uint64) (b []byte, err error) {
+	w := bytes.NewBuffer([]byte{0x00})
+	err = tlv.WriteVarNum(w, v)
+	if err != nil {
+		return
+	}
+	b = w.Bytes()
+	return
+}
+
 type segmentor struct {
 	ndn.Sender
 	size int
@@ -77,9 +98,6 @@ func (s *segmentor) SendData(d *ndn.Data) {
 		if end > len(d.Content) {
 			end = len(d.Content)
 		}
-		segNum := bytes.NewBuffer([]byte{0x00})
-		tlv.WriteVarNum(segNum, uint64(i))
-
 		seg := &ndn.Data{
 			MetaInfo: ndn.MetaInfo{
 				ContentType:     d.MetaInfo.ContentType,
@@ -89,11 +107,12 @@ func (s *segmentor) SendData(d *ndn.Data) {
 			},
 			Content: d.Content[i*s.size : end],
 		}
+		segNum, _ := writeSegNum(uint64(i))
 		seg.Name.Components = make([]ndn.Component, l+1)
 		copy(seg.Name.Components, d.Name.Components)
-		seg.Name.Components[l] = segNum.Bytes()
+		seg.Name.Components[l] = segNum
 		if end == len(d.Content) {
-			seg.MetaInfo.FinalBlockID.Component = segNum.Bytes()
+			seg.MetaInfo.FinalBlockID.Component = segNum
 		}
 		s.Sender.SendData(seg)
 	}
@@ -142,11 +161,12 @@ func Assembler(next Handler) Handler {
 
 			buf.Content = append(buf.Content, a.data.Content...)
 
-			last := a.data.Name.Components[l-1]
-			finalBlockID := a.data.MetaInfo.FinalBlockID.Component
-
-			if len(finalBlockID) > 0 &&
-				bytes.Compare(last, finalBlockID) >= 0 {
+			blockID, err := readSegNum(a.data.Name.Components[l-1])
+			if err != nil {
+				return
+			}
+			finalBlockID, err := readSegNum(a.data.MetaInfo.FinalBlockID.Component)
+			if err == nil && blockID >= finalBlockID {
 				// final block
 				buf.Name.Components = a.data.Name.Components[:l-1]
 				buf.MetaInfo = ndn.MetaInfo{
@@ -162,23 +182,10 @@ func Assembler(next Handler) Handler {
 				return
 			}
 
-			// prepare interest for next block
-			segNum := bytes.NewBuffer(last)
-			b, err := segNum.ReadByte()
-			if err != nil || b != 0x00 {
-				return
-			}
-			index, err := tlv.ReadVarNum(segNum)
-			if err != nil {
-				return
-			}
-
-			segNum.WriteByte(0x00)
-			tlv.WriteVarNum(segNum, index+1)
 			seg := new(ndn.Interest)
 			seg.Name.Components = make([]ndn.Component, l)
 			copy(seg.Name.Components, a.data.Name.Components[:l-1])
-			seg.Name.Components[l-1] = segNum.Bytes()
+			seg.Name.Components[l-1], _ = writeSegNum(blockID + 1)
 
 			fetch(seg)
 		}
