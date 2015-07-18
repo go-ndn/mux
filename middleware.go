@@ -65,27 +65,6 @@ func Logger(next Handler) Handler {
 	})
 }
 
-func readSegNum(b []byte) (v uint64, err error) {
-	r := bytes.NewReader(b)
-	t, err := r.ReadByte()
-	if err != nil || t != 0x00 {
-		err = tlv.ErrUnexpectedType
-		return
-	}
-	v, err = tlv.ReadVarNum(r)
-	return
-}
-
-func writeSegNum(v uint64) (b []byte, err error) {
-	w := bytes.NewBuffer([]byte{0x00})
-	err = tlv.WriteVarNum(w, v)
-	if err != nil {
-		return
-	}
-	b = w.Bytes()
-	return
-}
-
 type segmentor struct {
 	ndn.Sender
 	size int
@@ -107,7 +86,7 @@ func (s *segmentor) SendData(d *ndn.Data) {
 			},
 			Content: d.Content[i*s.size : end],
 		}
-		segNum, _ := writeSegNum(uint64(i))
+		segNum, _ := encodeMarkedNum(segmentMarker, uint64(i))
 		seg.Name.Components = make([]ndn.Component, l+1)
 		copy(seg.Name.Components, d.Name.Components)
 		seg.Name.Components[l] = segNum
@@ -161,11 +140,11 @@ func Assembler(next Handler) Handler {
 
 			buf.Content = append(buf.Content, a.data.Content...)
 
-			blockID, err := readSegNum(a.data.Name.Components[l-1])
+			blockID, err := decodeMarkedNum(segmentMarker, a.data.Name.Components[l-1])
 			if err != nil {
 				return
 			}
-			finalBlockID, err := readSegNum(a.data.MetaInfo.FinalBlockID.Component)
+			finalBlockID, err := decodeMarkedNum(segmentMarker, a.data.MetaInfo.FinalBlockID.Component)
 			if err == nil && blockID >= finalBlockID {
 				// final block
 				buf.Name.Components = a.data.Name.Components[:l-1]
@@ -185,7 +164,7 @@ func Assembler(next Handler) Handler {
 			seg := new(ndn.Interest)
 			seg.Name.Components = make([]ndn.Component, l)
 			copy(seg.Name.Components, a.data.Name.Components[:l-1])
-			seg.Name.Components[l-1], _ = writeSegNum(blockID + 1)
+			seg.Name.Components[l-1], _ = encodeMarkedNum(segmentMarker, blockID+1)
 
 			fetch(seg)
 		}
