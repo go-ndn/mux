@@ -16,3 +16,4 @@ A light-weight NDN application framework that is inspired by [express](https://g
 * AESDecryptor
 * Gzipper
 * Gunzipper
+* StaticData

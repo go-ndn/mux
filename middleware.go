@@ -7,9 +7,11 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"hash"
 	"io/ioutil"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -225,6 +227,27 @@ func FileServer(from, to string) Handler {
 	})
 }
 
+func StaticFile(path string) Middleware {
+	f, err := os.Open(path)
+	if err != nil {
+		panic(err)
+	}
+	var d ndn.Data
+	err = d.ReadFrom(tlv.NewReader(base64.NewDecoder(base64.StdEncoding, f)))
+	if err != nil {
+		panic(err)
+	}
+	return func(next Handler) Handler {
+		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+			if d.Name.Compare(i.Name) == 0 {
+				w.SendData(&d)
+			} else {
+				next.ServeNDN(w, i)
+			}
+		})
+	}
+}
+
 type aesEncryptor struct {
 	block cipher.Block
 	ndn.Sender
@@ -260,12 +283,11 @@ func (enc *aesEncryptor) Hijack() ndn.Sender {
 
 func AESEncryptor(key []byte) Middleware {
 	block, err := aes.NewCipher(key)
+	if err != nil {
+		panic(err)
+	}
 	return func(next Handler) Handler {
 		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-			if err != nil {
-				fmt.Println(err)
-				return
-			}
 			next.ServeNDN(&aesEncryptor{Sender: w, block: block}, i)
 		})
 	}
@@ -307,12 +329,11 @@ func (dec *aesDecryptor) Hijack() ndn.Sender {
 
 func AESDecryptor(key []byte) Middleware {
 	block, err := aes.NewCipher(key)
+	if err != nil {
+		panic(err)
+	}
 	return func(next Handler) Handler {
 		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-			if err != nil {
-				fmt.Println(err)
-				return
-			}
 			next.ServeNDN(&aesDecryptor{Sender: w, block: block}, i)
 		})
 	}
