@@ -175,11 +175,11 @@ func Assembler(next Handler) Handler {
 	})
 }
 
-type basicVerifier struct {
+type checksumVerifier struct {
 	ndn.Sender
 }
 
-func (v *basicVerifier) SendData(d *ndn.Data) {
+func (v *checksumVerifier) SendData(d *ndn.Data) {
 	var f func() hash.Hash
 	switch d.SignatureInfo.SignatureType {
 	case ndn.SignatureTypeDigestSHA256:
@@ -200,13 +200,13 @@ func (v *basicVerifier) SendData(d *ndn.Data) {
 	v.Sender.SendData(d)
 }
 
-func (v *basicVerifier) Hijack() ndn.Sender {
+func (v *checksumVerifier) Hijack() ndn.Sender {
 	return v.Sender
 }
 
-func BasicVerifier(next Handler) Handler {
+func ChecksumVerifier(next Handler) Handler {
 	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-		next.ServeNDN(&basicVerifier{Sender: w}, i)
+		next.ServeNDN(&checksumVerifier{Sender: w}, i)
 	})
 }
 

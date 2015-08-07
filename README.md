@@ -10,7 +10,7 @@ A light-weight NDN application framework that is inspired by [express](https://g
 * Logger
 * Segmentor
 * Assembler
-* BasicVerifier
+* ChecksumVerifier
 * FileServer
 * AESEncryptor
 * AESDecryptor
