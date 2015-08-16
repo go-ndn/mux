@@ -210,13 +210,9 @@ func ChecksumVerifier(next Handler) Handler {
 	})
 }
 
-func FileServer(from, to string) Handler {
-	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-		path := i.Name.String()
-		if !strings.HasPrefix(path, from) {
-			return
-		}
-		content, err := ioutil.ReadFile(to + filepath.Clean(strings.TrimPrefix(path, from)))
+func FileServer(from, to string) (string, Handler) {
+	return from, HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+		content, err := ioutil.ReadFile(to + filepath.Clean(strings.TrimPrefix(i.Name.String(), from)))
 		if err != nil {
 			return
 		}
@@ -227,7 +223,7 @@ func FileServer(from, to string) Handler {
 	})
 }
 
-func StaticFile(path string) Middleware {
+func StaticFile(path string) (string, Handler) {
 	f, err := os.Open(path)
 	if err != nil {
 		panic(err)
@@ -237,15 +233,9 @@ func StaticFile(path string) Middleware {
 	if err != nil {
 		panic(err)
 	}
-	return func(next Handler) Handler {
-		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-			if d.Name.Compare(i.Name) == 0 {
-				w.SendData(&d)
-			} else {
-				next.ServeNDN(w, i)
-			}
-		})
-	}
+	return d.Name.String(), HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+		w.SendData(&d)
+	})
 }
 
 type aesEncryptor struct {

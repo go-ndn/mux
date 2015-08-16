@@ -4,7 +4,7 @@ A light-weight NDN application framework that is inspired by [express](https://g
 
 [![GoDoc](https://godoc.org/github.com/go-ndn/mux?status.svg)](https://godoc.org/github.com/go-ndn/mux)
 
-## Available middleware
+## Available middleware/handler
 
 * Cacher
 * Logger
