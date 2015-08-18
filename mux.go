@@ -20,8 +20,22 @@ func (mux *Mux) ServeNDN(w ndn.Sender, i *ndn.Interest) {
 	mux.mw.ServeNDN(w, i)
 }
 
-func (mux *Mux) Run(w ndn.Sender, ch <-chan *ndn.Interest) {
+func (mux *Mux) Run(w ndn.Sender, ch <-chan *ndn.Interest, key ndn.Key) (err error) {
+	var names []string
+	mux.m.Visit(func(name string, v interface{}) interface{} {
+		names = append(names, name)
+		return v
+	})
+	for _, name := range names {
+		err = ndn.SendControl(w, "rib", "register", &ndn.Parameters{
+			Name: ndn.NewName(name),
+		}, key)
+		if err != nil {
+			return
+		}
+	}
 	for i := range ch {
 		go mux.ServeNDN(w, i)
 	}
+	return
 }
