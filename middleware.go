@@ -113,11 +113,45 @@ func Segmentor(size int) Middleware {
 
 type assembler struct {
 	ndn.Sender
-	data *ndn.Data
+	ndn.Data
+	Handler
 }
 
 func (a *assembler) SendData(d *ndn.Data) {
-	a.data = d
+	l := d.Name.Len()
+	if l == 0 {
+		return
+	}
+	blockID, err := decodeMarkedNum(segmentMarker, d.Name.Components[l-1])
+	if err != nil {
+		// not segmented
+		a.Data = *d
+		return
+	}
+	a.Content = append(a.Content, d.Content...)
+	finalBlockID, err := decodeMarkedNum(segmentMarker, d.MetaInfo.FinalBlockID.Component)
+	if err == nil && blockID >= finalBlockID {
+		// final block
+		a.Name.Components = d.Name.Components[:l-1]
+		a.MetaInfo = ndn.MetaInfo{
+			ContentType:     d.MetaInfo.ContentType,
+			FreshnessPeriod: d.MetaInfo.FreshnessPeriod,
+			EncryptionType:  d.MetaInfo.EncryptionType,
+			CompressionType: d.MetaInfo.CompressionType,
+		}
+
+		if l > 1 {
+			a.MetaInfo.FinalBlockID.Component = a.Name.Components[l-2]
+		}
+		return
+	}
+
+	// more blocks
+	seg := new(ndn.Interest)
+	seg.Name.Components = make([]ndn.Component, l)
+	copy(seg.Name.Components, d.Name.Components[:l-1])
+	seg.Name.Components[l-1], _ = encodeMarkedNum(segmentMarker, blockID+1)
+	a.ServeNDN(a, seg)
 }
 
 func (a *assembler) Hijack() ndn.Sender {
@@ -126,52 +160,11 @@ func (a *assembler) Hijack() ndn.Sender {
 
 func Assembler(next Handler) Handler {
 	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-		buf := new(ndn.Data)
-
-		var fetch func(*ndn.Interest)
-		fetch = func(i *ndn.Interest) {
-			a := &assembler{Sender: w}
-			next.ServeNDN(a, i)
-			if a.data == nil {
-				return
-			}
-			l := a.data.Name.Len()
-			if l == 0 {
-				return
-			}
-
-			buf.Content = append(buf.Content, a.data.Content...)
-
-			blockID, err := decodeMarkedNum(segmentMarker, a.data.Name.Components[l-1])
-			if err != nil {
-				return
-			}
-			finalBlockID, err := decodeMarkedNum(segmentMarker, a.data.MetaInfo.FinalBlockID.Component)
-			if err == nil && blockID >= finalBlockID {
-				// final block
-				buf.Name.Components = a.data.Name.Components[:l-1]
-				buf.MetaInfo = ndn.MetaInfo{
-					ContentType:     a.data.MetaInfo.ContentType,
-					FreshnessPeriod: a.data.MetaInfo.FreshnessPeriod,
-					EncryptionType:  a.data.MetaInfo.EncryptionType,
-					CompressionType: a.data.MetaInfo.CompressionType,
-				}
-
-				if l > 1 {
-					buf.MetaInfo.FinalBlockID.Component = buf.Name.Components[l-2]
-				}
-				return
-			}
-
-			seg := new(ndn.Interest)
-			seg.Name.Components = make([]ndn.Component, l)
-			copy(seg.Name.Components, a.data.Name.Components[:l-1])
-			seg.Name.Components[l-1], _ = encodeMarkedNum(segmentMarker, blockID+1)
-
-			fetch(seg)
+		a := &assembler{Sender: w, Handler: next}
+		next.ServeNDN(a, i)
+		if a.Name.Len() > 0 {
+			w.SendData(&a.Data)
 		}
-		fetch(i)
-		w.SendData(buf)
 	})
 }
 
@@ -239,7 +232,7 @@ func StaticFile(path string) (string, Handler) {
 }
 
 type aesEncryptor struct {
-	block cipher.Block
+	cipher.Block
 	ndn.Sender
 }
 
@@ -251,7 +244,7 @@ func (enc *aesEncryptor) SendData(d *ndn.Data) {
 	ciphertext := make([]byte, aes.BlockSize+len(d.Content))
 	iv := ciphertext[:aes.BlockSize]
 	rand.Read(iv)
-	stream := cipher.NewCTR(enc.block, iv)
+	stream := cipher.NewCTR(enc, iv)
 	stream.XORKeyStream(ciphertext[aes.BlockSize:], d.Content)
 
 	enc.Sender.SendData(&ndn.Data{
@@ -278,13 +271,13 @@ func AESEncryptor(key []byte) Middleware {
 	}
 	return func(next Handler) Handler {
 		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-			next.ServeNDN(&aesEncryptor{Sender: w, block: block}, i)
+			next.ServeNDN(&aesEncryptor{Sender: w, Block: block}, i)
 		})
 	}
 }
 
 type aesDecryptor struct {
-	block cipher.Block
+	cipher.Block
 	ndn.Sender
 }
 
@@ -297,7 +290,7 @@ func (dec *aesDecryptor) SendData(d *ndn.Data) {
 		return
 	}
 	plaintext := make([]byte, len(d.Content)-aes.BlockSize)
-	stream := cipher.NewCTR(dec.block, d.Content[:aes.BlockSize])
+	stream := cipher.NewCTR(dec, d.Content[:aes.BlockSize])
 	stream.XORKeyStream(plaintext, d.Content[aes.BlockSize:])
 
 	dec.Sender.SendData(&ndn.Data{
@@ -324,7 +317,7 @@ func AESDecryptor(key []byte) Middleware {
 	}
 	return func(next Handler) Handler {
 		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-			next.ServeNDN(&aesDecryptor{Sender: w, block: block}, i)
+			next.ServeNDN(&aesDecryptor{Sender: w, Block: block}, i)
 		})
 	}
 }
@@ -404,4 +397,54 @@ func Gunzipper(next Handler) Handler {
 	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
 		next.ServeNDN(&gunzipper{Sender: w}, i)
 	})
+}
+
+type signer struct {
+	ndn.Key
+	ndn.Sender
+}
+
+func (s *signer) SendData(d *ndn.Data) {
+	err := ndn.SignData(s, d)
+	if err != nil {
+		return
+	}
+	s.Sender.SendData(d)
+}
+
+func (s *signer) Hijack() ndn.Sender {
+	return s.Sender
+}
+
+func Signer(key ndn.Key) Middleware {
+	return func(next Handler) Handler {
+		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+			next.ServeNDN(&signer{Sender: w, Key: key}, i)
+		})
+	}
+}
+
+type verifier struct {
+	ndn.Key
+	ndn.Sender
+}
+
+func (v *verifier) SendData(d *ndn.Data) {
+	err := v.Verify(d, d.SignatureValue)
+	if err != nil {
+		return
+	}
+	v.Sender.SendData(d)
+}
+
+func (v *verifier) Hijack() ndn.Sender {
+	return v.Sender
+}
+
+func Verifier(key ndn.Key) Middleware {
+	return func(next Handler) Handler {
+		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+			next.ServeNDN(&verifier{Sender: w, Key: key}, i)
+		})
+	}
 }

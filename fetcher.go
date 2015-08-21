@@ -30,8 +30,5 @@ func (f *Fetcher) Fetch(w ndn.Sender, i *ndn.Interest, mw ...Middleware) []byte 
 	}
 	a := &assembler{Sender: w}
 	h.ServeNDN(a, i)
-	if a.data == nil {
-		return nil
-	}
-	return a.data.Content
+	return a.Content
 }
