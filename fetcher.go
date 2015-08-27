@@ -14,6 +14,15 @@ func (f *Fetcher) Use(m Middleware) {
 	f.mw = append(f.mw, m)
 }
 
+type dummySender struct {
+	ndn.Sender
+	ndn.Data
+}
+
+func (s *dummySender) SendData(d *ndn.Data) {
+	s.Data = *d
+}
+
 func (f *Fetcher) Fetch(w ndn.Sender, i *ndn.Interest, mw ...Middleware) []byte {
 	h := Handler(HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
 		d, ok := <-w.SendInterest(i)
@@ -28,7 +37,7 @@ func (f *Fetcher) Fetch(w ndn.Sender, i *ndn.Interest, mw ...Middleware) []byte 
 	for _, m := range mw {
 		h = m(h)
 	}
-	a := &assembler{Sender: w}
-	h.ServeNDN(a, i)
-	return a.Content
+	dummy := &dummySender{Sender: w}
+	h.ServeNDN(dummy, i)
+	return dummy.Content
 }

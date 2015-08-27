@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"hash"
 	"io/ioutil"
@@ -73,6 +74,10 @@ type segmentor struct {
 }
 
 func (s *segmentor) SendData(d *ndn.Data) {
+	if len(d.SignatureValue) != 0 {
+		s.Sender.SendData(d)
+		return
+	}
 	l := d.Name.Len()
 	for i := 0; i == 0 || i*s.size < len(d.Content); i++ {
 		end := (i + 1) * s.size
@@ -237,6 +242,10 @@ type aesEncryptor struct {
 }
 
 func (enc *aesEncryptor) SendData(d *ndn.Data) {
+	if len(d.SignatureValue) != 0 {
+		enc.Sender.SendData(d)
+		return
+	}
 	if d.MetaInfo.EncryptionType != ndn.EncryptionTypeNone {
 		enc.Sender.SendData(d)
 		return
@@ -327,6 +336,10 @@ type gzipper struct {
 }
 
 func (gz *gzipper) SendData(d *ndn.Data) {
+	if len(d.SignatureValue) != 0 {
+		gz.Sender.SendData(d)
+		return
+	}
 	if d.MetaInfo.CompressionType != ndn.CompressionTypeNone {
 		gz.Sender.SendData(d)
 		return
@@ -405,6 +418,10 @@ type signer struct {
 }
 
 func (s *signer) SendData(d *ndn.Data) {
+	if len(d.SignatureValue) != 0 {
+		s.Sender.SendData(d)
+		return
+	}
 	err := ndn.SignData(s, d)
 	if err != nil {
 		return
@@ -447,4 +464,29 @@ func Verifier(key ndn.Key) Middleware {
 			next.ServeNDN(&verifier{Sender: w, Key: key}, i)
 		})
 	}
+}
+
+type versioner struct {
+	ndn.Sender
+}
+
+func (v *versioner) SendData(d *ndn.Data) {
+	if len(d.SignatureValue) != 0 {
+		v.Sender.SendData(d)
+		return
+	}
+	timestamp := make([]byte, 8)
+	binary.BigEndian.PutUint64(timestamp, uint64(time.Now().UTC().UnixNano()/1000000))
+	d.Name.Components = append(d.Name.Components, timestamp)
+	v.Sender.SendData(d)
+}
+
+func (v *versioner) Hijack() ndn.Sender {
+	return v.Sender
+}
+
+func Versioner(next Handler) Handler {
+	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+		next.ServeNDN(&versioner{Sender: w}, i)
+	})
 }
