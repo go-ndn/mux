@@ -120,6 +120,7 @@ type assembler struct {
 	ndn.Sender
 	ndn.Data
 	Handler
+	blockID uint64
 }
 
 func (a *assembler) SendData(d *ndn.Data) {
@@ -133,6 +134,10 @@ func (a *assembler) SendData(d *ndn.Data) {
 		a.Data = *d
 		return
 	}
+	if blockID != a.blockID {
+		return
+	}
+	a.blockID++
 	a.Content = append(a.Content, d.Content...)
 	finalBlockID, err := decodeMarkedNum(segmentMarker, d.MetaInfo.FinalBlockID.Component)
 	if err == nil && blockID >= finalBlockID {
@@ -155,7 +160,7 @@ func (a *assembler) SendData(d *ndn.Data) {
 	seg := new(ndn.Interest)
 	seg.Name.Components = make([]ndn.Component, l)
 	copy(seg.Name.Components, d.Name.Components[:l-1])
-	seg.Name.Components[l-1], _ = encodeMarkedNum(segmentMarker, blockID+1)
+	seg.Name.Components[l-1], _ = encodeMarkedNum(segmentMarker, a.blockID)
 	a.ServeNDN(a, seg)
 }
 
