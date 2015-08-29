@@ -35,6 +35,7 @@ func TestMiddlewareNOOP(t *testing.T) {
 		Assembler(Cacher(Segmentor(1)(h))),
 		AESDecryptor(key)(AESEncryptor(key)(h)),
 		Gunzipper(Gzipper(h)),
+		Logger(h),
 	} {
 		sender := &dummySender{}
 		test.ServeNDN(sender, &ndn.Interest{
@@ -105,7 +106,6 @@ func TestHijacker(t *testing.T) {
 
 	for _, test := range []Hijacker{
 		&cacher{Sender: sender},
-		&logger{Sender: sender},
 		&segmentor{Sender: sender},
 		&assembler{Sender: sender},
 		&checksumVerifier{Sender: sender},

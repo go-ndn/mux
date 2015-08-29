@@ -9,15 +9,14 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
-	"fmt"
 	"hash"
 	"io/ioutil"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/go-ndn/ndn"
 	"github.com/go-ndn/tlv"
 )
@@ -46,25 +45,11 @@ func Cacher(next Handler) Handler {
 	})
 }
 
-type logger struct {
-	ndn.Sender
-}
-
-func (l *logger) SendData(d *ndn.Data) {
-	spew.Dump(d)
-	l.Sender.SendData(d)
-}
-
-func (l *logger) Hijack() ndn.Sender {
-	return l.Sender
-}
-
 func Logger(next Handler) Handler {
 	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-		spew.Dump(i)
 		before := time.Now()
-		next.ServeNDN(&logger{Sender: w}, i)
-		fmt.Printf("%s completed in %s\n", i.Name, time.Since(before))
+		next.ServeNDN(w, i)
+		log.Printf("%s completed in %s\n", i.Name, time.Since(before))
 	})
 }
 
