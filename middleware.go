@@ -11,12 +11,12 @@ import (
 	"encoding/binary"
 	"hash"
 	"io/ioutil"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/go-ndn/log"
 	"github.com/go-ndn/ndn"
 	"github.com/go-ndn/tlv"
 )
