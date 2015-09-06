@@ -46,7 +46,7 @@ func TestMiddlewareNOOP(t *testing.T) {
 			Name: ndn.NewName("/a/b/c"),
 		})
 		if !reflect.DeepEqual(want, sender.Data) {
-			t.Fatalf("expect %#v, got %#v", want, sender.Data)
+			t.Fatalf("expect %+v, got %+v", want, sender.Data)
 		}
 	}
 }
@@ -67,7 +67,7 @@ func TestChecksumVerifier(t *testing.T) {
 		sender := &dummySender{}
 		ChecksumVerifier(dummyHandler(&want)).ServeNDN(sender, nil)
 		if !reflect.DeepEqual(want, sender.Data) {
-			t.Fatalf("expect %#v, got %#v", want, sender.Data)
+			t.Fatalf("expect %+v, got %+v", want, sender.Data)
 		}
 	}
 }
@@ -89,7 +89,7 @@ func TestSignerVerifier(t *testing.T) {
 	sender := &dummySender{}
 	Verifier(key)(Signer(key)(dummyHandler(&want))).ServeNDN(sender, nil)
 	if want.Name.Compare(sender.Name) != 0 {
-		t.Fatalf("expect %#v, got %#v", want, sender.Data)
+		t.Fatalf("expect %+v, got %+v", want, sender.Data)
 	}
 }
 
@@ -101,7 +101,7 @@ func TestVersioner(t *testing.T) {
 	sender := &dummySender{}
 	Versioner(dummyHandler(&want)).ServeNDN(sender, nil)
 	if want.Name.Len() >= sender.Name.Len() {
-		t.Fatalf("expect %#v, got %#v", want, sender.Data)
+		t.Fatalf("expect %+v, got %+v", want, sender.Data)
 	}
 }
 
