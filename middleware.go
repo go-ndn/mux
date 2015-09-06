@@ -240,23 +240,14 @@ func (enc *aesEncryptor) SendData(d *ndn.Data) {
 		enc.Sender.SendData(d)
 		return
 	}
-	ciphertext := make([]byte, aes.BlockSize+len(d.Content))
-	iv := ciphertext[:aes.BlockSize]
+	iv := make([]byte, aes.BlockSize)
 	rand.Read(iv)
 	stream := cipher.NewCTR(enc, iv)
-	stream.XORKeyStream(ciphertext[aes.BlockSize:], d.Content)
+	stream.XORKeyStream(d.Content, d.Content)
+	d.Content = append(d.Content, iv...)
 
-	enc.Sender.SendData(&ndn.Data{
-		Name: d.Name,
-		MetaInfo: ndn.MetaInfo{
-			ContentType:     d.MetaInfo.ContentType,
-			FreshnessPeriod: d.MetaInfo.FreshnessPeriod,
-			FinalBlockID:    d.MetaInfo.FinalBlockID,
-			EncryptionType:  ndn.EncryptionTypeAESWithCTR,
-			CompressionType: d.MetaInfo.CompressionType,
-		},
-		Content: ciphertext,
-	})
+	d.MetaInfo.EncryptionType = ndn.EncryptionTypeAESWithCTR
+	enc.Sender.SendData(d)
 }
 
 func (enc *aesEncryptor) Hijack() ndn.Sender {
@@ -288,21 +279,13 @@ func (dec *aesDecryptor) SendData(d *ndn.Data) {
 	if len(d.Content) < aes.BlockSize {
 		return
 	}
-	plaintext := make([]byte, len(d.Content)-aes.BlockSize)
-	stream := cipher.NewCTR(dec, d.Content[:aes.BlockSize])
-	stream.XORKeyStream(plaintext, d.Content[aes.BlockSize:])
+	iv := d.Content[len(d.Content)-aes.BlockSize:]
+	d.Content = d.Content[:len(d.Content)-aes.BlockSize]
+	stream := cipher.NewCTR(dec, iv)
+	stream.XORKeyStream(d.Content, d.Content)
 
-	dec.Sender.SendData(&ndn.Data{
-		Name: d.Name,
-		MetaInfo: ndn.MetaInfo{
-			ContentType:     d.MetaInfo.ContentType,
-			FreshnessPeriod: d.MetaInfo.FreshnessPeriod,
-			FinalBlockID:    d.MetaInfo.FinalBlockID,
-			EncryptionType:  ndn.EncryptionTypeNone,
-			CompressionType: d.MetaInfo.CompressionType,
-		},
-		Content: plaintext,
-	})
+	d.MetaInfo.EncryptionType = ndn.EncryptionTypeNone
+	dec.Sender.SendData(d)
 }
 
 func (dec *aesDecryptor) Hijack() ndn.Sender {
@@ -339,17 +322,9 @@ func (gz *gzipper) SendData(d *ndn.Data) {
 	gzw.Write(d.Content)
 	gzw.Close()
 
-	gz.Sender.SendData(&ndn.Data{
-		Name: d.Name,
-		MetaInfo: ndn.MetaInfo{
-			ContentType:     d.MetaInfo.ContentType,
-			FreshnessPeriod: d.MetaInfo.FreshnessPeriod,
-			FinalBlockID:    d.MetaInfo.FinalBlockID,
-			EncryptionType:  d.MetaInfo.EncryptionType,
-			CompressionType: ndn.CompressionTypeGZIP,
-		},
-		Content: buf.Bytes(),
-	})
+	d.MetaInfo.CompressionType = ndn.CompressionTypeGZIP
+	d.Content = buf.Bytes()
+	gz.Sender.SendData(d)
 }
 
 func (gz *gzipper) Hijack() ndn.Sender {
@@ -371,25 +346,17 @@ func (gz *gunzipper) SendData(d *ndn.Data) {
 		gz.Sender.SendData(d)
 		return
 	}
-	buf := new(bytes.Buffer)
 	gzr, err := gzip.NewReader(bytes.NewReader(d.Content))
 	if err != nil {
 		return
 	}
-	defer gzr.Close()
+	buf := new(bytes.Buffer)
 	buf.ReadFrom(gzr)
+	gzr.Close()
 
-	gz.Sender.SendData(&ndn.Data{
-		Name: d.Name,
-		MetaInfo: ndn.MetaInfo{
-			ContentType:     d.MetaInfo.ContentType,
-			FreshnessPeriod: d.MetaInfo.FreshnessPeriod,
-			FinalBlockID:    d.MetaInfo.FinalBlockID,
-			EncryptionType:  d.MetaInfo.EncryptionType,
-			CompressionType: ndn.CompressionTypeNone,
-		},
-		Content: buf.Bytes(),
-	})
+	d.MetaInfo.CompressionType = ndn.CompressionTypeNone
+	d.Content = buf.Bytes()
+	gz.Sender.SendData(d)
 }
 
 func (gz *gunzipper) Hijack() ndn.Sender {

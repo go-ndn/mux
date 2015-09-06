@@ -10,9 +10,14 @@ import (
 	"github.com/go-ndn/ndn"
 )
 
-func dummyHandler(d ndn.Data) Handler {
+func dummyHandler(d *ndn.Data) Handler {
 	return HandlerFunc(func(w ndn.Sender, _ *ndn.Interest) {
-		w.SendData(&d)
+		copied := *d
+		if len(d.Content) > 0 {
+			copied.Content = make([]byte, len(d.Content))
+			copy(copied.Content, d.Content)
+		}
+		w.SendData(&copied)
 	})
 }
 
@@ -27,10 +32,9 @@ func TestMiddlewareNOOP(t *testing.T) {
 		Content: []byte{1, 2, 3},
 	}
 
-	h := dummyHandler(want)
-
 	key := []byte("example key 1234")
 
+	h := dummyHandler(&want)
 	for _, test := range []Handler{
 		Assembler(Cacher(Segmentor(1)(h))),
 		AESDecryptor(key)(AESEncryptor(key)(h)),
@@ -61,7 +65,7 @@ func TestChecksumVerifier(t *testing.T) {
 		want.WriteTo(ioutil.Discard)
 
 		sender := &dummySender{}
-		ChecksumVerifier(dummyHandler(want)).ServeNDN(sender, nil)
+		ChecksumVerifier(dummyHandler(&want)).ServeNDN(sender, nil)
 		if !reflect.DeepEqual(want, sender.Data) {
 			t.Fatalf("expect %#v, got %#v", want, sender.Data)
 		}
@@ -83,7 +87,7 @@ func TestSignerVerifier(t *testing.T) {
 	}
 
 	sender := &dummySender{}
-	Verifier(key)(Signer(key)(dummyHandler(want))).ServeNDN(sender, nil)
+	Verifier(key)(Signer(key)(dummyHandler(&want))).ServeNDN(sender, nil)
 	if want.Name.Compare(sender.Name) != 0 {
 		t.Fatalf("expect %#v, got %#v", want, sender.Data)
 	}
@@ -95,7 +99,7 @@ func TestVersioner(t *testing.T) {
 	}
 
 	sender := &dummySender{}
-	Versioner(dummyHandler(want)).ServeNDN(sender, nil)
+	Versioner(dummyHandler(&want)).ServeNDN(sender, nil)
 	if want.Name.Len() >= sender.Name.Len() {
 		t.Fatalf("expect %#v, got %#v", want, sender.Data)
 	}
