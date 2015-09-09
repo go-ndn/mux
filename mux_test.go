@@ -6,15 +6,15 @@ import (
 	"github.com/go-ndn/ndn"
 )
 
-func dummyMiddleware(h Handler) Handler { return h }
+func fakeMiddleware(h Handler) Handler { return h }
 
 func TestMux(t *testing.T) {
 	var count int
 	m := New()
-	m.Use(dummyMiddleware)
+	m.Use(fakeMiddleware)
 	m.HandleFunc("/a/b/c", func(_ ndn.Sender, _ *ndn.Interest) {
 		count++
-	}, dummyMiddleware)
+	}, fakeMiddleware)
 
 	m.ServeNDN(nil, &ndn.Interest{
 		Name: ndn.NewName("/a/b/c"),

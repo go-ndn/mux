@@ -21,12 +21,26 @@ import (
 	"github.com/go-ndn/tlv"
 )
 
+// if data packet is signed, do nothing in middleware
+func signed(d *ndn.Data) bool {
+	switch d.SignatureInfo.SignatureType {
+	case ndn.SignatureTypeSHA256WithRSA:
+	case ndn.SignatureTypeSHA256WithECDSA:
+	case ndn.SignatureTypeSHA256WithHMAC:
+	default:
+		return false
+	}
+	return len(d.SignatureValue) != 0
+}
+
 type cacher struct {
 	ndn.Sender
 }
 
 func (c *cacher) SendData(d *ndn.Data) {
-	ndn.ContentStore.Add(d)
+	copied := new(ndn.Data)
+	tlv.Copy(copied, d)
+	ndn.ContentStore.Add(copied)
 	c.Sender.SendData(d)
 }
 
@@ -40,7 +54,9 @@ func Cacher(next Handler) Handler {
 		if d == nil {
 			next.ServeNDN(&cacher{Sender: w}, i)
 		} else {
-			w.SendData(d)
+			copied := new(ndn.Data)
+			tlv.Copy(copied, d)
+			w.SendData(copied)
 		}
 	})
 }
@@ -59,7 +75,7 @@ type segmentor struct {
 }
 
 func (s *segmentor) SendData(d *ndn.Data) {
-	if len(d.SignatureValue) != 0 {
+	if signed(d) {
 		s.Sender.SendData(d)
 		return
 	}
@@ -103,7 +119,7 @@ func Segmentor(size int) Middleware {
 
 type assembler struct {
 	ndn.Sender
-	ndn.Data
+	*ndn.Data
 	Handler
 	blockID uint64
 }
@@ -116,13 +132,19 @@ func (a *assembler) SendData(d *ndn.Data) {
 	blockID, err := decodeMarkedNum(segmentMarker, d.Name.Components[l-1])
 	if err != nil {
 		// not segmented
-		a.Data = *d
+		a.Data = d
 		return
 	}
+	// check if this block is requested
 	if blockID != a.blockID {
 		return
 	}
 	a.blockID++
+
+	if a.Data == nil {
+		a.Data = new(ndn.Data)
+	}
+
 	a.Content = append(a.Content, d.Content...)
 	finalBlockID, err := decodeMarkedNum(segmentMarker, d.MetaInfo.FinalBlockID.Component)
 	if err == nil && blockID >= finalBlockID {
@@ -157,8 +179,8 @@ func Assembler(next Handler) Handler {
 	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
 		a := &assembler{Sender: w, Handler: next}
 		next.ServeNDN(a, i)
-		if a.Name.Len() > 0 {
-			w.SendData(&a.Data)
+		if a.Data != nil {
+			w.SendData(a.Data)
 		}
 	})
 }
@@ -232,7 +254,7 @@ type aesEncryptor struct {
 }
 
 func (enc *aesEncryptor) SendData(d *ndn.Data) {
-	if len(d.SignatureValue) != 0 {
+	if signed(d) {
 		enc.Sender.SendData(d)
 		return
 	}
@@ -309,7 +331,7 @@ type gzipper struct {
 }
 
 func (gz *gzipper) SendData(d *ndn.Data) {
-	if len(d.SignatureValue) != 0 {
+	if signed(d) {
 		gz.Sender.SendData(d)
 		return
 	}
@@ -375,7 +397,7 @@ type signer struct {
 }
 
 func (s *signer) SendData(d *ndn.Data) {
-	if len(d.SignatureValue) != 0 {
+	if signed(d) {
 		s.Sender.SendData(d)
 		return
 	}
@@ -428,7 +450,7 @@ type versioner struct {
 }
 
 func (v *versioner) SendData(d *ndn.Data) {
-	if len(d.SignatureValue) != 0 {
+	if signed(d) {
 		v.Sender.SendData(d)
 		return
 	}

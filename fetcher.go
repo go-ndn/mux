@@ -14,21 +14,23 @@ func (f *Fetcher) Use(m Middleware) {
 	f.mw = append(f.mw, m)
 }
 
-type dummySender struct {
+type collector struct {
 	ndn.Sender
-	ndn.Data
+	*ndn.Data
 }
 
-func (s *dummySender) SendData(d *ndn.Data) {
-	s.Data = *d
+func (c *collector) SendData(d *ndn.Data) {
+	c.Data = d
 }
 
-func (f *Fetcher) Fetch(w ndn.Sender, i *ndn.Interest, mw ...Middleware) []byte {
+func (f *Fetcher) Fetch(remote ndn.Sender, i *ndn.Interest, mw ...Middleware) []byte {
 	h := Handler(HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+		// interest sender is "remote"
 		d, ok := <-w.SendInterest(i)
 		if !ok {
 			return
 		}
+		// data sender is "collector" without middleware
 		w.SendData(d)
 	}))
 	for _, m := range f.mw {
@@ -37,7 +39,10 @@ func (f *Fetcher) Fetch(w ndn.Sender, i *ndn.Interest, mw ...Middleware) []byte 
 	for _, m := range mw {
 		h = m(h)
 	}
-	dummy := &dummySender{Sender: w}
-	h.ServeNDN(dummy, i)
-	return dummy.Content
+	c := &collector{Sender: remote}
+	h.ServeNDN(c, i)
+	if c.Data == nil {
+		return nil
+	}
+	return c.Content
 }
