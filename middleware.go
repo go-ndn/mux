@@ -119,8 +119,8 @@ func Segmentor(size int) Middleware {
 
 type assembler struct {
 	ndn.Sender
-	*ndn.Data
 	Handler
+	content []byte
 	blockID uint64
 }
 
@@ -132,7 +132,7 @@ func (a *assembler) SendData(d *ndn.Data) {
 	blockID, err := decodeMarkedNum(segmentMarker, d.Name.Components[l-1])
 	if err != nil {
 		// not segmented
-		a.Data = d
+		a.Sender.SendData(d)
 		return
 	}
 	// check if this block is requested
@@ -141,25 +141,25 @@ func (a *assembler) SendData(d *ndn.Data) {
 	}
 	a.blockID++
 
-	if a.Data == nil {
-		a.Data = new(ndn.Data)
-	}
-
-	a.Content = append(a.Content, d.Content...)
+	a.content = append(a.content, d.Content...)
 	finalBlockID, err := decodeMarkedNum(segmentMarker, d.MetaInfo.FinalBlockID.Component)
 	if err == nil && blockID >= finalBlockID {
 		// final block
-		a.Name.Components = d.Name.Components[:l-1]
-		a.MetaInfo = ndn.MetaInfo{
-			ContentType:     d.MetaInfo.ContentType,
-			FreshnessPeriod: d.MetaInfo.FreshnessPeriod,
-			EncryptionType:  d.MetaInfo.EncryptionType,
-			CompressionType: d.MetaInfo.CompressionType,
+		assembled := &ndn.Data{
+			Name: ndn.Name{Components: d.Name.Components[:l-1]},
+			MetaInfo: ndn.MetaInfo{
+				ContentType:     d.MetaInfo.ContentType,
+				FreshnessPeriod: d.MetaInfo.FreshnessPeriod,
+				EncryptionType:  d.MetaInfo.EncryptionType,
+				CompressionType: d.MetaInfo.CompressionType,
+			},
+			Content: a.content,
+		}
+		if l > 1 {
+			assembled.MetaInfo.FinalBlockID.Component = assembled.Name.Components[l-2]
 		}
 
-		if l > 1 {
-			a.MetaInfo.FinalBlockID.Component = a.Name.Components[l-2]
-		}
+		a.Sender.SendData(assembled)
 		return
 	}
 
@@ -177,11 +177,7 @@ func (a *assembler) Hijack() ndn.Sender {
 
 func Assembler(next Handler) Handler {
 	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-		a := &assembler{Sender: w, Handler: next}
-		next.ServeNDN(a, i)
-		if a.Data != nil {
-			w.SendData(a.Data)
-		}
+		next.ServeNDN(&assembler{Sender: w, Handler: next}, i)
 	})
 }
 
