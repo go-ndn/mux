@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/go-ndn/ndn"
+	"github.com/go-ndn/tlv"
 )
 
 // only deep copy data packet's content
@@ -63,7 +64,7 @@ func TestChecksumVerifier(t *testing.T) {
 				SignatureType: test,
 			},
 		}
-		want.WriteTo(ioutil.Discard)
+		want.WriteTo(tlv.NewWriter(ioutil.Discard))
 
 		c := &collector{}
 		ChecksumVerifier(copyHandler(want)).ServeNDN(c, nil)

@@ -35,31 +35,42 @@ func signed(d *ndn.Data) bool {
 
 type cacher struct {
 	ndn.Sender
+	cpy bool
 }
 
 func (c *cacher) SendData(d *ndn.Data) {
-	copied := new(ndn.Data)
-	tlv.Copy(copied, d)
-	ndn.ContentStore.Add(copied)
-	c.Sender.SendData(d)
+	ndn.ContentStore.Add(d)
+	copySend(c.Sender, d, c.cpy)
+}
+
+func copySend(w ndn.Sender, d *ndn.Data, cpy bool) {
+	if cpy {
+		copied := new(ndn.Data)
+		tlv.Copy(copied, d)
+		w.SendData(copied)
+	} else {
+		w.SendData(d)
+	}
 }
 
 func (c *cacher) Hijack() ndn.Sender {
 	return c.Sender
 }
 
-func Cacher(next Handler) Handler {
-	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-		d := ndn.ContentStore.Get(i)
-		if d == nil {
-			next.ServeNDN(&cacher{Sender: w}, i)
-		} else {
-			copied := new(ndn.Data)
-			tlv.Copy(copied, d)
-			w.SendData(copied)
-		}
-	})
+func RawCacher(cpy bool) Middleware {
+	return func(next Handler) Handler {
+		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+			d := ndn.ContentStore.Get(i)
+			if d == nil {
+				next.ServeNDN(&cacher{Sender: w, cpy: cpy}, i)
+			} else {
+				copySend(w, d, cpy)
+			}
+		})
+	}
 }
+
+var Cacher = RawCacher(true)
 
 func Logger(next Handler) Handler {
 	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
@@ -94,7 +105,7 @@ func (s *segmentor) SendData(d *ndn.Data) {
 			},
 			Content: d.Content[i*s.size : end],
 		}
-		segNum, _ := encodeMarkedNum(segmentMarker, uint64(i))
+		segNum := encodeMarkedNum(segmentMarker, uint64(i))
 		seg.Name.Components = make([]ndn.Component, l+1)
 		copy(seg.Name.Components, d.Name.Components)
 		seg.Name.Components[l] = segNum
@@ -167,7 +178,7 @@ func (a *assembler) SendData(d *ndn.Data) {
 	seg := new(ndn.Interest)
 	seg.Name.Components = make([]ndn.Component, l)
 	copy(seg.Name.Components, d.Name.Components[:l-1])
-	seg.Name.Components[l-1], _ = encodeMarkedNum(segmentMarker, a.blockID)
+	seg.Name.Components[l-1] = encodeMarkedNum(segmentMarker, a.blockID)
 	a.ServeNDN(a, seg)
 }
 

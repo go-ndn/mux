@@ -1,7 +1,6 @@
 package mux
 
 import (
-	"bytes"
 	"encoding/binary"
 	"io"
 	"math"
@@ -11,18 +10,11 @@ const (
 	segmentMarker = 0x00
 )
 
-func encodeMarkedNum(marker byte, v uint64) (b []byte, err error) {
-	buf := new(bytes.Buffer)
-	err = buf.WriteByte(marker)
-	if err != nil {
-		return
-	}
-	err = encodeUint64(buf, v)
-	if err != nil {
-		return
-	}
-	b = buf.Bytes()
-	return
+func encodeMarkedNum(marker byte, v uint64) []byte {
+	b := make([]byte, 9)
+	b[0] = marker
+	n := encodeUint64(b[1:], v)
+	return b[:n+1]
 }
 
 func decodeMarkedNum(marker byte, b []byte) (v uint64, err error) {
@@ -48,21 +40,19 @@ func decodeUint64(b []byte) uint64 {
 	return 0
 }
 
-func encodeUint64(w io.Writer, v uint64) (err error) {
-	b := make([]byte, 8)
+func encodeUint64(b []byte, v uint64) int {
 	switch {
 	case v > math.MaxUint32:
 		binary.BigEndian.PutUint64(b, v)
-		_, err = w.Write(b)
+		return 8
 	case v > math.MaxUint16:
 		binary.BigEndian.PutUint32(b, uint32(v))
-		_, err = w.Write(b[:4])
+		return 4
 	case v > math.MaxUint8:
 		binary.BigEndian.PutUint16(b, uint16(v))
-		_, err = w.Write(b[:2])
+		return 2
 	default:
 		b[0] = uint8(v)
-		_, err = w.Write(b[:1])
+		return 1
 	}
-	return
 }

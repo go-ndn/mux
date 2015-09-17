@@ -9,11 +9,7 @@ func TestMarkedNum(t *testing.T) {
 		1<<32 - 1,
 		1<<64 - 1,
 	} {
-		b, err := encodeMarkedNum(segmentMarker, test)
-		if err != nil {
-			t.Fatal(err)
-		}
-		got, err := decodeMarkedNum(segmentMarker, b)
+		got, err := decodeMarkedNum(segmentMarker, encodeMarkedNum(segmentMarker, test))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -21,5 +17,4 @@ func TestMarkedNum(t *testing.T) {
 			t.Fatalf("expect %d, got %d", test, got)
 		}
 	}
-
 }
