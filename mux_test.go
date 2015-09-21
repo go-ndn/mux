@@ -12,12 +12,12 @@ func TestMux(t *testing.T) {
 	var count int
 	m := New()
 	m.Use(fakeMiddleware)
-	m.HandleFunc("/a/b/c", func(_ ndn.Sender, _ *ndn.Interest) {
+	m.HandleFunc("/A", func(_ ndn.Sender, _ *ndn.Interest) {
 		count++
 	}, fakeMiddleware)
 
 	m.ServeNDN(nil, &ndn.Interest{
-		Name: ndn.NewName("/a/b/c"),
+		Name: ndn.NewName("/A/B"),
 	})
 
 	if count != 1 {

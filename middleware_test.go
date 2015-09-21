@@ -11,97 +11,75 @@ import (
 	"github.com/go-ndn/tlv"
 )
 
-// only deep copy data packet's content
-func copyHandler(d *ndn.Data) Handler {
-	return HandlerFunc(func(w ndn.Sender, _ *ndn.Interest) {
-		copied := *d
-		if len(d.Content) > 0 {
-			copied.Content = make([]byte, len(d.Content))
-			copy(copied.Content, d.Content)
-		}
-		w.SendData(&copied)
-	})
-}
-
-func TestMiddlewareNOOP(t *testing.T) {
-	want := &ndn.Data{
-		Name: ndn.NewName("/a/b/c"),
+func fakeData() *ndn.Data {
+	return &ndn.Data{
+		Name: ndn.NewName("/A/B"),
 		MetaInfo: ndn.MetaInfo{
 			FinalBlockID: ndn.FinalBlockID{
-				Component: []byte("c"),
+				Component: []byte("B"),
 			},
 		},
 		Content: []byte{1, 2, 3},
 	}
-
-	key := []byte("example key 1234")
-
-	h := copyHandler(want)
-	for _, test := range []Handler{
-		Assembler(Cacher(Segmentor(1)(h))),
-		AESDecryptor(key)(AESEncryptor(key)(h)),
-		Gunzipper(Gzipper(h)),
-		Logger(h),
-	} {
-		c := &collector{}
-		test.ServeNDN(c, &ndn.Interest{
-			Name: ndn.NewName("/a/b/c"),
-		})
-		if !reflect.DeepEqual(want, c.Data) {
-			t.Fatalf("expect %+v, got %+v", want, c.Data)
-		}
-	}
 }
 
-func TestChecksumVerifier(t *testing.T) {
-	for _, test := range []uint64{
-		ndn.SignatureTypeDigestSHA256,
-		ndn.SignatureTypeDigestCRC32C,
-	} {
-		want := &ndn.Data{
-			Name: ndn.NewName("/a/b/c"),
-			SignatureInfo: ndn.SignatureInfo{
-				SignatureType: test,
-			},
-		}
-		want.WriteTo(tlv.NewWriter(ioutil.Discard))
+var (
+	fakeHandler = HandlerFunc(func(w ndn.Sender, _ *ndn.Interest) {
+		w.SendData(fakeData())
+	})
+)
 
-		c := &collector{}
-		ChecksumVerifier(copyHandler(want)).ServeNDN(c, nil)
-		if !reflect.DeepEqual(want, c.Data) {
-			t.Fatalf("expect %+v, got %+v", want, c.Data)
-		}
-	}
+func fakeChecksumHandler(sig uint64) Handler {
+	return HandlerFunc(func(w ndn.Sender, _ *ndn.Interest) {
+		d := fakeData()
+		d.SignatureInfo.SignatureType = sig
+		d.WriteTo(tlv.NewWriter(ioutil.Discard))
+		w.SendData(d)
+	})
 }
 
-func TestSignerVerifier(t *testing.T) {
-	want := &ndn.Data{
-		Name: ndn.NewName("/a/b/c"),
-	}
-
+func TestMiddleware(t *testing.T) {
+	// encrypt
+	encryptKey := []byte("example key 1234")
+	// sign
 	pri, err := rsa.GenerateKey(rand.Reader, 512)
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := &ndn.RSAKey{
-		Name:       ndn.NewName("/a/b/c"),
+	signKey := &ndn.RSAKey{
 		PrivateKey: pri,
 	}
 
-	c := &collector{}
-	Verifier(key)(Signer(key)(copyHandler(want))).ServeNDN(c, nil)
-	if c.Data == nil || want.Name.Compare(c.Name) != 0 {
-		t.Fatalf("expect %+v, got %+v", want, c.Data)
+	want := fakeData()
+	for _, test := range []Handler{
+		Assembler(Cacher(Segmentor(1)(fakeHandler))),
+		AESDecryptor(encryptKey)(AESEncryptor(encryptKey)(fakeHandler)),
+		Gunzipper(Gzipper(fakeHandler)),
+		Logger(fakeHandler),
+		Verifier(signKey)(Signer(signKey)(fakeHandler)),
+		ChecksumVerifier(fakeChecksumHandler(ndn.SignatureTypeDigestSHA256)),
+		ChecksumVerifier(fakeChecksumHandler(ndn.SignatureTypeDigestCRC32C)),
+	} {
+		c := &collector{}
+		test.ServeNDN(c, &ndn.Interest{
+			Name: ndn.NewName("/A/B"),
+		})
+		if c.Data != nil {
+			// reset signature for deep equal
+			c.SignatureInfo = ndn.SignatureInfo{}
+			c.SignatureValue = nil
+		}
+		if !reflect.DeepEqual(want, c.Data) {
+			t.Fatalf("expect %+v, got %+v", want, c.Data)
+		}
 	}
 }
 
 func TestVersioner(t *testing.T) {
-	want := &ndn.Data{
-		Name: ndn.NewName("/a/b/c"),
-	}
+	want := fakeData()
 
 	c := &collector{}
-	Versioner(copyHandler(want)).ServeNDN(c, nil)
+	Versioner(fakeHandler).ServeNDN(c, nil)
 	if c.Data == nil || want.Name.Len() >= c.Name.Len() {
 		t.Fatalf("expect %+v, got %+v", want, c.Data)
 	}
