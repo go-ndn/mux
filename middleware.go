@@ -9,10 +9,12 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"fmt"
 	"hash"
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -427,14 +429,75 @@ func Signer(key ndn.Key) Middleware {
 	}
 }
 
+type VerifyRule struct {
+	DataPattern string
+	re          *regexp.Regexp
+
+	KeyPattern string
+	DataSHA256 string
+}
+
 type verifier struct {
-	ndn.Key
 	ndn.Sender
+	Handler
+	rule []*VerifyRule
+}
+
+func (v *verifier) verify(d *ndn.Data) bool {
+	name := d.Name.String()
+	keyName := d.SignatureInfo.KeyLocator.Name.String()
+	for _, rule := range v.rule {
+		if !rule.re.MatchString(name) {
+			continue
+		}
+
+		if rule.DataSHA256 != "" {
+			// check for anchor
+			digest, err := tlv.Hash(sha256.New, d)
+			if err != nil {
+				return false
+			}
+			return rule.DataSHA256 == fmt.Sprintf("%x", digest)
+		}
+
+		if rule.KeyPattern != "" &&
+			!regexp.MustCompile(rule.re.ReplaceAllString(name, rule.KeyPattern)).MatchString(keyName) {
+			// invalid key name
+			return false
+		}
+		c := &collector{Sender: v.Sender}
+		v.ServeNDN(c, &ndn.Interest{Name: d.SignatureInfo.KeyLocator.Name})
+		if c.Data == nil {
+			// cannot fetch key
+			return false
+		}
+
+		key, err := ndn.CertificateFromData(c.Data)
+		if err != nil {
+			// invalid key
+			return false
+		}
+
+		if ndn.VerifyData(key, d) != nil {
+			// key cannot verify data
+			return false
+		}
+		// recursively verify key
+		return v.verify(c.Data)
+	}
+	return false
 }
 
 func (v *verifier) SendData(d *ndn.Data) {
-	err := v.Verify(d, d.SignatureValue)
-	if err != nil {
+	name := d.Name.String()
+	for _, rule := range v.rule {
+		if !rule.re.MatchString(name) {
+			continue
+		}
+		// if any rule matches, recursive validation is enforced
+		if v.verify(d) {
+			v.Sender.SendData(d)
+		}
 		return
 	}
 	v.Sender.SendData(d)
@@ -444,10 +507,13 @@ func (v *verifier) Hijack() ndn.Sender {
 	return v.Sender
 }
 
-func Verifier(key ndn.Key) Middleware {
+func Verifier(rule ...*VerifyRule) Middleware {
+	for _, r := range rule {
+		r.re = regexp.MustCompile(r.DataPattern)
+	}
 	return func(next Handler) Handler {
 		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-			next.ServeNDN(&verifier{Sender: w, Key: key}, i)
+			next.ServeNDN(&verifier{Sender: w, Handler: next, rule: rule}, i)
 		})
 	}
 }

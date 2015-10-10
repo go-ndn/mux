@@ -3,6 +3,8 @@ package mux
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
+	"fmt"
 	"io/ioutil"
 	"reflect"
 	"testing"
@@ -38,28 +40,69 @@ func fakeChecksumHandler(sig uint64) Handler {
 	})
 }
 
+func fakeVerifyRule(l int) (key []ndn.Key, rule []*VerifyRule, err error) {
+	key = make([]ndn.Key, l)
+	rule = make([]*VerifyRule, l)
+	for i := 0; i < l; i++ {
+		var pri *rsa.PrivateKey
+		pri, err = rsa.GenerateKey(rand.Reader, 512)
+		if err != nil {
+			return
+		}
+		key[i] = &ndn.RSAKey{
+			Name:       ndn.NewName(fmt.Sprintf("/%d", i)),
+			PrivateKey: pri,
+		}
+		rule[i] = &VerifyRule{
+			DataPattern: fmt.Sprintf("/%d", i),
+		}
+		var d *ndn.Data
+		d, err = ndn.CertificateToData(key[i])
+		if err != nil {
+			return
+		}
+		if i > 0 {
+			// sign current key vith previous key
+			ndn.SignData(key[i-1], d)
+			rule[i].KeyPattern = fmt.Sprintf("/%d", i-1)
+		} else {
+			// anchor, get sha256
+			var digest []byte
+			digest, err = tlv.Hash(sha256.New, d)
+			if err != nil {
+				return
+			}
+			rule[i].DataSHA256 = fmt.Sprintf("%x", digest)
+		}
+		ndn.ContentStore.Add(d)
+	}
+	return
+}
+
 func TestMiddleware(t *testing.T) {
 	// encrypt
 	encryptKey := []byte("example key 1234")
 	// sign
-	pri, err := rsa.GenerateKey(rand.Reader, 512)
+	key, rule, err := fakeVerifyRule(3)
 	if err != nil {
 		t.Fatal(err)
 	}
-	signKey := &ndn.RSAKey{
-		PrivateKey: pri,
-	}
+	rule = append(rule, &VerifyRule{
+		DataPattern: "/A/B",
+		KeyPattern:  fmt.Sprintf("/%d", len(rule)-1),
+	})
 
 	want := fakeData()
-	for _, test := range []Handler{
+	for i, test := range []Handler{
+		Verifier(rule...)(Cacher(Signer(key[len(key)-1])(fakeHandler))),
 		Assembler(Cacher(Segmentor(1)(fakeHandler))),
 		AESDecryptor(encryptKey)(AESEncryptor(encryptKey)(fakeHandler)),
 		Gunzipper(Gzipper(fakeHandler)),
 		Logger(fakeHandler),
-		Verifier(signKey)(Signer(signKey)(fakeHandler)),
 		ChecksumVerifier(fakeChecksumHandler(ndn.SignatureTypeDigestSHA256)),
 		ChecksumVerifier(fakeChecksumHandler(ndn.SignatureTypeDigestCRC32C)),
 	} {
+
 		c := &collector{}
 		test.ServeNDN(c, &ndn.Interest{
 			Name: ndn.NewName("/A/B"),
@@ -70,8 +113,10 @@ func TestMiddleware(t *testing.T) {
 			c.SignatureValue = nil
 		}
 		if !reflect.DeepEqual(want, c.Data) {
-			t.Fatalf("expect %+v, got %+v", want, c.Data)
+			t.Fatalf("test %d: expect %+v, got %+v", i, want, c.Data)
 		}
+		// reset cache
+		ndn.ContentStore = ndn.NewCache(16)
 	}
 }
 
