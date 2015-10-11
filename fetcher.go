@@ -20,7 +20,9 @@ type collector struct {
 }
 
 func (c *collector) SendData(d *ndn.Data) {
-	c.Data = d
+	if c.Data == nil {
+		c.Data = d
+	}
 }
 
 func (f *Fetcher) Fetch(remote ndn.Sender, i *ndn.Interest, mw ...Middleware) []byte {

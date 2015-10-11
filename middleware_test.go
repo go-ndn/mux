@@ -40,12 +40,28 @@ func fakeChecksumHandler(sig uint64) Handler {
 	})
 }
 
-func fakeVerifyRule(l int) (key []ndn.Key, rule []*VerifyRule, err error) {
+func server(collection ...*ndn.Data) Middleware {
+	return func(next Handler) Handler {
+		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+			for _, d := range collection {
+				if i.Name.Compare(d.Name) != 0 {
+					continue
+				}
+				w.SendData(d)
+				return
+			}
+			next.ServeNDN(w, i)
+		})
+	}
+}
+
+func fakeVerifyRule(l int) (key []ndn.Key, rule []*VerifyRule, certServer Middleware, err error) {
 	key = make([]ndn.Key, l)
 	rule = make([]*VerifyRule, l)
+	cert := make([]*ndn.Data, l)
 	for i := 0; i < l; i++ {
 		var pri *rsa.PrivateKey
-		pri, err = rsa.GenerateKey(rand.Reader, 512)
+		pri, err = rsa.GenerateKey(rand.Reader, 1024)
 		if err != nil {
 			return
 		}
@@ -56,34 +72,31 @@ func fakeVerifyRule(l int) (key []ndn.Key, rule []*VerifyRule, err error) {
 		rule[i] = &VerifyRule{
 			DataPattern: fmt.Sprintf("/%d", i),
 		}
-		var d *ndn.Data
-		d, err = ndn.CertificateToData(key[i])
+		cert[i], err = ndn.CertificateToData(key[i])
 		if err != nil {
 			return
 		}
 		if i > 0 {
 			// sign current key vith previous key
-			ndn.SignData(key[i-1], d)
+			ndn.SignData(key[i-1], cert[i])
 			rule[i].KeyPattern = fmt.Sprintf("/%d", i-1)
 		} else {
 			// anchor, get sha256
 			var digest []byte
-			digest, err = tlv.Hash(sha256.New, d)
+			digest, err = tlv.Hash(sha256.New, cert[i])
 			if err != nil {
 				return
 			}
 			rule[i].DataSHA256 = fmt.Sprintf("%x", digest)
 		}
-		ndn.ContentStore.Add(d)
 	}
+	certServer = server(cert...)
 	return
 }
 
 func TestMiddleware(t *testing.T) {
-	// encrypt
-	encryptKey := []byte("example key 1234")
 	// sign
-	key, rule, err := fakeVerifyRule(3)
+	key, rule, certServer, err := fakeVerifyRule(3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,17 +104,20 @@ func TestMiddleware(t *testing.T) {
 		DataPattern: "/A/B",
 		KeyPattern:  fmt.Sprintf("/%d", len(rule)-1),
 	})
+	signKey := key[len(key)-1]
+	rsaKey := signKey.(*ndn.RSAKey)
 
 	want := fakeData()
 	for i, test := range []Handler{
-		Verifier(rule...)(Cacher(Signer(key[len(key)-1])(fakeHandler))),
-		Assembler(Cacher(Segmentor(1)(fakeHandler))),
-		AESDecryptor(encryptKey)(AESEncryptor(encryptKey)(fakeHandler)),
+		Assembler(Queuer(Cacher(Segmentor(1)(fakeHandler)))),
+		Decryptor(rsaKey)(Queuer(Cacher(Encryptor(rsaKey)(fakeHandler)))),
+		Verifier(rule...)(certServer(Signer(signKey)(fakeHandler))),
 		Gunzipper(Gzipper(fakeHandler)),
 		Logger(fakeHandler),
 		ChecksumVerifier(fakeChecksumHandler(ndn.SignatureTypeDigestSHA256)),
 		ChecksumVerifier(fakeChecksumHandler(ndn.SignatureTypeDigestCRC32C)),
 	} {
+		t.Log(i)
 
 		c := &collector{}
 		test.ServeNDN(c, &ndn.Interest{
@@ -113,7 +129,7 @@ func TestMiddleware(t *testing.T) {
 			c.SignatureValue = nil
 		}
 		if !reflect.DeepEqual(want, c.Data) {
-			t.Fatalf("test %d: expect %+v, got %+v", i, want, c.Data)
+			t.Fatalf("expect %+v, got %+v", want, c.Data)
 		}
 		// reset cache
 		ndn.ContentStore = ndn.NewCache(16)
@@ -138,8 +154,8 @@ func TestHijacker(t *testing.T) {
 		&segmentor{Sender: c},
 		&assembler{Sender: c},
 		&checksumVerifier{Sender: c},
-		&aesEncryptor{Sender: c},
-		&aesDecryptor{Sender: c},
+		&encryptor{Sender: c},
+		&decryptor{Sender: c},
 		&gzipper{Sender: c},
 		&gunzipper{Sender: c},
 		&signer{Sender: c},

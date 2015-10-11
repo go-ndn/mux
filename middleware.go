@@ -6,6 +6,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
@@ -102,10 +103,10 @@ func (s *segmentor) SendData(d *ndn.Data) {
 			MetaInfo: ndn.MetaInfo{
 				ContentType:     d.MetaInfo.ContentType,
 				FreshnessPeriod: d.MetaInfo.FreshnessPeriod,
-				EncryptionType:  d.MetaInfo.EncryptionType,
 				CompressionType: d.MetaInfo.CompressionType,
 			},
-			Content: d.Content[i*s.size : end],
+			Content:        d.Content[i*s.size : end],
+			EncryptionInfo: d.EncryptionInfo,
 		}
 		segNum := encodeMarkedNum(segmentMarker, uint64(i))
 		seg.Name.Components = make([]ndn.Component, l+1)
@@ -163,10 +164,10 @@ func (a *assembler) SendData(d *ndn.Data) {
 			MetaInfo: ndn.MetaInfo{
 				ContentType:     d.MetaInfo.ContentType,
 				FreshnessPeriod: d.MetaInfo.FreshnessPeriod,
-				EncryptionType:  d.MetaInfo.EncryptionType,
 				CompressionType: d.MetaInfo.CompressionType,
 			},
-			Content: a.content,
+			Content:        a.content,
+			EncryptionInfo: d.EncryptionInfo,
 		}
 		if l > 1 {
 			assembled.MetaInfo.FinalBlockID.Component = assembled.Name.Components[l-2]
@@ -247,90 +248,134 @@ func StaticFile(path string) (string, Handler) {
 	if err != nil {
 		panic(err)
 	}
-	var d ndn.Data
+	defer f.Close()
+	d := new(ndn.Data)
 	err = d.ReadFrom(tlv.NewReader(base64.NewDecoder(base64.StdEncoding, f)))
 	if err != nil {
 		panic(err)
 	}
 	return d.Name.String(), HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-		w.SendData(&d)
+		w.SendData(d)
 	})
 }
 
-type aesEncryptor struct {
-	cipher.Block
+type encryptor struct {
+	pub []*ndn.RSAKey
 	ndn.Sender
 }
 
-func (enc *aesEncryptor) SendData(d *ndn.Data) {
+func (enc *encryptor) SendData(d *ndn.Data) {
 	if signed(d) {
 		enc.Sender.SendData(d)
 		return
 	}
-	if d.MetaInfo.EncryptionType != ndn.EncryptionTypeNone {
+	if d.EncryptionInfo.EncryptionType != ndn.EncryptionTypeNone {
 		enc.Sender.SendData(d)
 		return
 	}
-	iv := make([]byte, aes.BlockSize)
-	rand.Read(iv)
-	stream := cipher.NewCTR(enc, iv)
-	stream.XORKeyStream(d.Content, d.Content)
-	d.Content = append(d.Content, iv...)
+	// content key name
+	keyName := make([]ndn.Component, d.Name.Len()+3)
+	copy(keyName, d.Name.Components)
+	keyName[len(keyName)-3] = []byte("C-KEY")
 
-	d.MetaInfo.EncryptionType = ndn.EncryptionTypeAESWithCTR
+	keyName[len(keyName)-2] = make([]byte, 8)
+	binary.BigEndian.PutUint64(keyName[len(keyName)-2], uint64(time.Now().UTC().UnixNano()/1000000))
+
+	keyName[len(keyName)-1] = make([]byte, 4)
+	rand.Read(keyName[len(keyName)-1])
+
+	ckey := make([]byte, 16)
+	rand.Read(ckey)
+
+	// AES-128 CTR
+	d.EncryptionInfo.EncryptionType = ndn.EncryptionTypeAESWithCTR
+	d.EncryptionInfo.KeyLocator.Name.Components = keyName
+	d.EncryptionInfo.IV = make([]byte, aes.BlockSize)
+	rand.Read(d.EncryptionInfo.IV)
+	block, err := aes.NewCipher(ckey)
+	if err != nil {
+		return
+	}
+	cipher.NewCTR(block, d.EncryptionInfo.IV).XORKeyStream(d.Content, d.Content)
+
 	enc.Sender.SendData(d)
+
+	// encrypt content key with RSA-OAEP
+	for _, pub := range enc.pub {
+		keyFor := make([]ndn.Component, len(keyName)+pub.Name.Len()+1)
+		copy(keyFor, keyName)
+		keyFor[len(keyName)] = []byte("FOR")
+		copy(keyFor[len(keyName)+1:], pub.Name.Components)
+
+		dkey := new(ndn.Data)
+		dkey.Name.Components = keyFor
+		dkey.Content, err = rsa.EncryptOAEP(sha256.New(), rand.Reader, &pub.PrivateKey.PublicKey, ckey, nil)
+		if err != nil {
+			continue
+		}
+		enc.Sender.SendData(dkey)
+	}
 }
 
-func (enc *aesEncryptor) Hijack() ndn.Sender {
+func (enc *encryptor) Hijack() ndn.Sender {
 	return enc.Sender
 }
 
-func AESEncryptor(key []byte) Middleware {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		panic(err)
-	}
+func Encryptor(pub ...*ndn.RSAKey) Middleware {
 	return func(next Handler) Handler {
 		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-			next.ServeNDN(&aesEncryptor{Sender: w, Block: block}, i)
+			next.ServeNDN(&encryptor{Sender: w, pub: pub}, i)
 		})
 	}
 }
 
-type aesDecryptor struct {
-	cipher.Block
+type decryptor struct {
+	pri *ndn.RSAKey
+	Handler
 	ndn.Sender
 }
 
-func (dec *aesDecryptor) SendData(d *ndn.Data) {
-	if d.MetaInfo.EncryptionType != ndn.EncryptionTypeAESWithCTR {
+func (dec *decryptor) SendData(d *ndn.Data) {
+	if d.EncryptionInfo.EncryptionType != ndn.EncryptionTypeAESWithCTR {
 		dec.Sender.SendData(d)
 		return
 	}
-	if len(d.Content) < aes.BlockSize {
+	l := d.EncryptionInfo.KeyLocator.Name.Len()
+	keyFor := make([]ndn.Component, l+dec.pri.Name.Len()+1)
+	copy(keyFor, d.EncryptionInfo.KeyLocator.Name.Components)
+	keyFor[l] = []byte("FOR")
+	copy(keyFor[l+1:], dec.pri.Name.Components)
+
+	c := &collector{Sender: dec.Sender}
+	dec.ServeNDN(c, &ndn.Interest{Name: ndn.Name{Components: keyFor}})
+	if c.Data == nil {
 		return
 	}
-	iv := d.Content[len(d.Content)-aes.BlockSize:]
-	d.Content = d.Content[:len(d.Content)-aes.BlockSize]
-	stream := cipher.NewCTR(dec, iv)
-	stream.XORKeyStream(d.Content, d.Content)
 
-	d.MetaInfo.EncryptionType = ndn.EncryptionTypeNone
+	ckey, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, dec.pri.PrivateKey, c.Data.Content, nil)
+	if err != nil {
+		return
+	}
+
+	block, err := aes.NewCipher(ckey)
+	if err != nil {
+		return
+	}
+
+	cipher.NewCTR(block, d.EncryptionInfo.IV).XORKeyStream(d.Content, d.Content)
+	d.EncryptionInfo = ndn.EncryptionInfo{}
+
 	dec.Sender.SendData(d)
 }
 
-func (dec *aesDecryptor) Hijack() ndn.Sender {
+func (dec *decryptor) Hijack() ndn.Sender {
 	return dec.Sender
 }
 
-func AESDecryptor(key []byte) Middleware {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		panic(err)
-	}
+func Decryptor(pri *ndn.RSAKey) Middleware {
 	return func(next Handler) Handler {
 		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-			next.ServeNDN(&aesDecryptor{Sender: w, Block: block}, i)
+			next.ServeNDN(&decryptor{Sender: w, pri: pri, Handler: next}, i)
 		})
 	}
 }
@@ -540,5 +585,24 @@ func (v *versioner) Hijack() ndn.Sender {
 func Versioner(next Handler) Handler {
 	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
 		next.ServeNDN(&versioner{Sender: w}, i)
+	})
+}
+
+type queuer struct {
+	ndn.Sender
+	d []*ndn.Data
+}
+
+func (q *queuer) SendData(d *ndn.Data) {
+	q.d = append(q.d, d)
+}
+
+func Queuer(next Handler) Handler {
+	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+		q := &queuer{Sender: w}
+		next.ServeNDN(q, i)
+		for _, d := range q.d {
+			w.SendData(d)
+		}
 	})
 }

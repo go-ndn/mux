@@ -13,10 +13,11 @@ A light-weight NDN application framework that is inspired by [express](https://g
 * ChecksumVerifier
 * FileServer
 * StaticFile
-* AESEncryptor
-* AESDecryptor
+* Encryptor
+* Decryptor
 * Gzipper
 * Gunzipper
 * Signer
 * Verifier
 * Versioner
+* Queuer
