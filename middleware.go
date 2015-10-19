@@ -274,15 +274,9 @@ func (enc *encryptor) SendData(d *ndn.Data) {
 		return
 	}
 	// content key name
-	keyName := make([]ndn.Component, d.Name.Len()+3)
+	keyName := make([]ndn.Component, d.Name.Len()+1)
 	copy(keyName, d.Name.Components)
-	keyName[len(keyName)-3] = []byte("C-KEY")
-
-	keyName[len(keyName)-2] = make([]byte, 8)
-	binary.BigEndian.PutUint64(keyName[len(keyName)-2], uint64(time.Now().UTC().UnixNano()/1000000))
-
-	keyName[len(keyName)-1] = make([]byte, 4)
-	rand.Read(keyName[len(keyName)-1])
+	keyName[len(keyName)-1] = []byte("C-KEY")
 
 	ckey := make([]byte, 16)
 	rand.Read(ckey)
