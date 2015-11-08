@@ -55,6 +55,10 @@ func server(collection ...*ndn.Data) Middleware {
 	}
 }
 
+func fakeCacher(next Handler) Handler {
+	return RawCacher(ndn.NewCache(16), true)(next)
+}
+
 func fakeVerifyRule(l int) (key []ndn.Key, rule []*VerifyRule, certServer Middleware, err error) {
 	key = make([]ndn.Key, l)
 	rule = make([]*VerifyRule, l)
@@ -109,8 +113,8 @@ func TestMiddleware(t *testing.T) {
 
 	want := fakeData()
 	for i, test := range []Handler{
-		Assembler(Queuer(Cacher(Segmentor(1)(fakeHandler)))),
-		Decryptor(rsaKey)(Queuer(Cacher(Encryptor(rsaKey)(fakeHandler)))),
+		Assembler(Queuer(fakeCacher(Segmentor(1)(fakeHandler)))),
+		Decryptor(rsaKey)(Queuer(fakeCacher(Encryptor(rsaKey)(fakeHandler)))),
 		Verifier(rule...)(certServer(Signer(signKey)(fakeHandler))),
 		Gunzipper(Gzipper(fakeHandler)),
 		Logger(fakeHandler),
@@ -131,8 +135,6 @@ func TestMiddleware(t *testing.T) {
 		if !reflect.DeepEqual(want, c.Data) {
 			t.Fatalf("expect %+v, got %+v", want, c.Data)
 		}
-		// reset cache
-		ndn.ContentStore = ndn.NewCache(16)
 	}
 }
 

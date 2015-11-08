@@ -38,11 +38,12 @@ func signed(d *ndn.Data) bool {
 
 type cacher struct {
 	ndn.Sender
+	ndn.Cache
 	cpy bool
 }
 
 func (c *cacher) SendData(d *ndn.Data) {
-	ndn.ContentStore.Add(d)
+	c.Add(d)
 	copySend(c.Sender, d, c.cpy)
 }
 
@@ -60,12 +61,12 @@ func (c *cacher) Hijack() ndn.Sender {
 	return c.Sender
 }
 
-func RawCacher(cpy bool) Middleware {
+func RawCacher(cache ndn.Cache, cpy bool) Middleware {
 	return func(next Handler) Handler {
 		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-			d := ndn.ContentStore.Get(i)
+			d := cache.Get(i)
 			if d == nil {
-				next.ServeNDN(&cacher{Sender: w, cpy: cpy}, i)
+				next.ServeNDN(&cacher{Sender: w, Cache: cache, cpy: cpy}, i)
 			} else {
 				copySend(w, d, cpy)
 			}
@@ -73,7 +74,7 @@ func RawCacher(cpy bool) Middleware {
 	}
 }
 
-var Cacher = RawCacher(true)
+var Cacher = RawCacher(ndn.ContentStore, true)
 
 func Logger(next Handler) Handler {
 	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
