@@ -163,6 +163,7 @@ func TestHijacker(t *testing.T) {
 		&signer{Sender: c},
 		&verifier{Sender: c},
 		&versioner{Sender: c},
+		&queuer{Sender: c},
 	} {
 		got := test.Hijack()
 		if got != c {

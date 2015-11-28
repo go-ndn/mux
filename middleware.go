@@ -592,6 +592,10 @@ func (q *queuer) SendData(d *ndn.Data) {
 	q.d = append(q.d, d)
 }
 
+func (q *queuer) Hijack() ndn.Sender {
+	return q.Sender
+}
+
 func Queuer(next Handler) Handler {
 	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
 		q := &queuer{Sender: w}
