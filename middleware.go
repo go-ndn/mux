@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-ndn/log"
@@ -603,5 +604,75 @@ func Queuer(next Handler) Handler {
 		for _, d := range q.d {
 			w.SendData(d)
 		}
+	})
+}
+
+type NotifyRule struct {
+	DataPattern string
+	re          *regexp.Regexp
+
+	Listener string
+	Retry    int
+	Timeout  time.Duration
+}
+
+type notifier struct {
+	ndn.Sender
+	rule []*NotifyRule
+}
+
+func (n *notifier) SendData(d *ndn.Data) {
+	n.Sender.SendData(d)
+
+	name := d.Name.String()
+	var wg sync.WaitGroup
+	// notify all listeners that match
+	for _, rule := range n.rule {
+		if !rule.re.MatchString(name) {
+			continue
+		}
+		wg.Add(1)
+		go func(r *NotifyRule) {
+			defer wg.Done()
+			for i := 0; i < r.Retry; i++ {
+				_, ok := <-n.SendInterest(&ndn.Interest{
+					Name:     ndn.NewName(fmt.Sprintf("%s/ACK/%s", r.Listener, name)),
+					LifeTime: uint64(r.Timeout / time.Millisecond),
+				})
+				if ok {
+					break
+				}
+			}
+		}(rule)
+	}
+	wg.Wait()
+}
+
+func (n *notifier) Hijack() ndn.Sender {
+	return n.Sender
+}
+
+func Notifier(rule ...*NotifyRule) Middleware {
+	for _, r := range rule {
+		r.re = regexp.MustCompile(r.DataPattern)
+	}
+	return func(next Handler) Handler {
+		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+			next.ServeNDN(&notifier{Sender: w, rule: rule}, i)
+		})
+	}
+}
+
+func Listener(name string, h func(string) error) (string, Handler) {
+	name += "/ACK"
+	return name, HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+		err := h(strings.TrimPrefix(i.Name.String(), name))
+		if err != nil {
+			// cannot fetch data
+			return
+		}
+		w.SendData(&ndn.Data{
+			Name: i.Name,
+		})
 	})
 }

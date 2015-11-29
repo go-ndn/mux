@@ -21,3 +21,5 @@ A light-weight NDN application framework that is inspired by [express](https://g
 * Verifier
 * Versioner
 * Queuer
+* Notifier
+* Listener
