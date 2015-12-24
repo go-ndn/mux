@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/go-ndn/log"
+	"github.com/go-ndn/lpm"
 	"github.com/go-ndn/ndn"
 	"github.com/go-ndn/tlv"
 )
@@ -111,7 +112,7 @@ func (s *segmentor) SendData(d *ndn.Data) {
 			EncryptionInfo: d.EncryptionInfo,
 		}
 		segNum := encodeMarkedNum(segmentMarker, uint64(i))
-		seg.Name.Components = make([]ndn.Component, l+1)
+		seg.Name.Components = make([]lpm.Component, l+1)
 		copy(seg.Name.Components, d.Name.Components)
 		seg.Name.Components[l] = segNum
 		if end == len(d.Content) {
@@ -181,7 +182,7 @@ func (a *assembler) SendData(d *ndn.Data) {
 
 	// more blocks
 	seg := new(ndn.Interest)
-	seg.Name.Components = make([]ndn.Component, l)
+	seg.Name.Components = make([]lpm.Component, l)
 	copy(seg.Name.Components, d.Name.Components[:l-1])
 	seg.Name.Components[l-1] = encodeMarkedNum(segmentMarker, a.blockID)
 	a.ServeNDN(a, seg)
@@ -276,7 +277,7 @@ func (enc *encryptor) SendData(d *ndn.Data) {
 		return
 	}
 	// content key name
-	keyName := make([]ndn.Component, d.Name.Len()+1)
+	keyName := make([]lpm.Component, d.Name.Len()+1)
 	copy(keyName, d.Name.Components)
 	keyName[len(keyName)-1] = []byte("C-KEY")
 
@@ -298,7 +299,7 @@ func (enc *encryptor) SendData(d *ndn.Data) {
 
 	// encrypt content key with RSA-OAEP
 	for _, pub := range enc.pub {
-		keyFor := make([]ndn.Component, len(keyName)+pub.Name.Len()+1)
+		keyFor := make([]lpm.Component, len(keyName)+pub.Name.Len()+1)
 		copy(keyFor, keyName)
 		keyFor[len(keyName)] = []byte("FOR")
 		copy(keyFor[len(keyName)+1:], pub.Name.Components)
@@ -337,7 +338,7 @@ func (dec *decryptor) SendData(d *ndn.Data) {
 		return
 	}
 	l := d.EncryptionInfo.KeyLocator.Name.Len()
-	keyFor := make([]ndn.Component, l+dec.pri.Name.Len()+1)
+	keyFor := make([]lpm.Component, l+dec.pri.Name.Len()+1)
 	copy(keyFor, d.EncryptionInfo.KeyLocator.Name.Components)
 	keyFor[l] = []byte("FOR")
 	copy(keyFor[l+1:], dec.pri.Name.Components)
