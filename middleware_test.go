@@ -120,10 +120,6 @@ func TestMiddleware(t *testing.T) {
 		Logger(fakeHandler),
 		ChecksumVerifier(fakeChecksumHandler(ndn.SignatureTypeDigestSHA256)),
 		ChecksumVerifier(fakeChecksumHandler(ndn.SignatureTypeDigestCRC32C)),
-		Notifier(
-			&NotifyRule{DataPattern: "^$"}, // nothing
-			&NotifyRule{DataPattern: ""},   // everything
-		)(fakeHandler),
 	} {
 		t.Log(i)
 
@@ -168,7 +164,6 @@ func TestHijacker(t *testing.T) {
 		&verifier{Sender: c},
 		&versioner{Sender: c},
 		&queuer{Sender: c},
-		&notifier{Sender: c},
 	} {
 		got := test.Hijack()
 		if got != c {
