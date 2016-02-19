@@ -45,7 +45,9 @@ type cacher struct {
 
 func (c *cacher) SendData(d *ndn.Data) {
 	c.Add(d)
-	copySend(c.Sender, d, c.cpy)
+	if c.Sender != nil {
+		copySend(c.Sender, d, c.cpy)
+	}
 }
 
 func copySend(w ndn.Sender, d *ndn.Data, cpy bool) {
