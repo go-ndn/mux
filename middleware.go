@@ -609,11 +609,8 @@ func Queuer(next Handler) Handler {
 	})
 }
 
-func Notify(w ndn.Sender, listener, dataName string, timeout time.Duration) <-chan *ndn.Data {
-	return w.SendInterest(&ndn.Interest{
-		Name:     ndn.NewName(fmt.Sprintf("%s/ACK%s", listener, dataName)),
-		LifeTime: uint64(timeout / time.Millisecond),
-	})
+func Notify(listener, dataName string) ndn.Name {
+	return ndn.NewName(fmt.Sprintf("%s/ACK%s", listener, dataName))
 }
 
 func Listener(name string, h func(string, ndn.Sender, *ndn.Interest)) (string, Handler) {
