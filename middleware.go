@@ -44,6 +44,13 @@ type cacher struct {
 }
 
 func (c *cacher) SendData(d *ndn.Data) {
+	if d.MetaInfo.CacheHint == ndn.CacheHintNoCache {
+		// producer indicates that this packet should not be cached
+		if c.Sender != nil {
+			c.Sender.SendData(d)
+		}
+		return
+	}
 	c.Add(d)
 	if c.Sender != nil {
 		copySend(c.Sender, d, c.cpy)
@@ -104,21 +111,19 @@ func (s *segmentor) SendData(d *ndn.Data) {
 			end = len(d.Content)
 		}
 		seg := &ndn.Data{
-			MetaInfo: ndn.MetaInfo{
-				ContentType:     d.MetaInfo.ContentType,
-				FreshnessPeriod: d.MetaInfo.FreshnessPeriod,
-				CompressionType: d.MetaInfo.CompressionType,
-			},
-			Content:        d.Content[i*s.size : end],
-			EncryptionInfo: d.EncryptionInfo,
+			Content: d.Content[i*s.size : end],
 		}
 		segNum := encodeMarkedNum(segmentMarker, uint64(i))
 		seg.Name.Components = make([]lpm.Component, l+1)
 		copy(seg.Name.Components, d.Name.Components)
 		seg.Name.Components[l] = segNum
+
+		seg.MetaInfo = d.MetaInfo
+		seg.MetaInfo.FinalBlockID = ndn.FinalBlockID{}
 		if end == len(d.Content) {
 			seg.MetaInfo.FinalBlockID.Component = segNum
 		}
+
 		s.Sender.SendData(seg)
 	}
 }
@@ -164,15 +169,12 @@ func (a *assembler) SendData(d *ndn.Data) {
 	if err == nil && blockID >= finalBlockID {
 		// final block
 		assembled := &ndn.Data{
-			Name: ndn.Name{Components: d.Name.Components[:l-1]},
-			MetaInfo: ndn.MetaInfo{
-				ContentType:     d.MetaInfo.ContentType,
-				FreshnessPeriod: d.MetaInfo.FreshnessPeriod,
-				CompressionType: d.MetaInfo.CompressionType,
-			},
-			Content:        a.content,
-			EncryptionInfo: d.EncryptionInfo,
+			Name:    ndn.Name{Components: d.Name.Components[:l-1]},
+			Content: a.content,
 		}
+
+		assembled.MetaInfo = d.MetaInfo
+		assembled.MetaInfo.FinalBlockID = ndn.FinalBlockID{}
 		if l > 1 {
 			assembled.MetaInfo.FinalBlockID.Component = assembled.Name.Components[l-2]
 		}
@@ -273,7 +275,7 @@ func (enc *encryptor) SendData(d *ndn.Data) {
 		enc.Sender.SendData(d)
 		return
 	}
-	if d.EncryptionInfo.EncryptionType != ndn.EncryptionTypeNone {
+	if d.MetaInfo.EncryptionType != ndn.EncryptionTypeNone {
 		enc.Sender.SendData(d)
 		return
 	}
@@ -286,15 +288,15 @@ func (enc *encryptor) SendData(d *ndn.Data) {
 	rand.Read(ckey)
 
 	// AES-128 CTR
-	d.EncryptionInfo.EncryptionType = ndn.EncryptionTypeAESWithCTR
-	d.EncryptionInfo.KeyLocator.Name.Components = keyName
-	d.EncryptionInfo.IV = make([]byte, aes.BlockSize)
-	rand.Read(d.EncryptionInfo.IV)
+	d.MetaInfo.EncryptionType = ndn.EncryptionTypeAESWithCTR
+	d.MetaInfo.EncryptionKeyLocator.Name.Components = keyName
+	d.MetaInfo.EncryptionIV = make([]byte, aes.BlockSize)
+	rand.Read(d.MetaInfo.EncryptionIV)
 	block, err := aes.NewCipher(ckey)
 	if err != nil {
 		return
 	}
-	cipher.NewCTR(block, d.EncryptionInfo.IV).XORKeyStream(d.Content, d.Content)
+	cipher.NewCTR(block, d.MetaInfo.EncryptionIV).XORKeyStream(d.Content, d.Content)
 
 	enc.Sender.SendData(d)
 
@@ -334,13 +336,13 @@ type decryptor struct {
 }
 
 func (dec *decryptor) SendData(d *ndn.Data) {
-	if d.EncryptionInfo.EncryptionType != ndn.EncryptionTypeAESWithCTR {
+	if d.MetaInfo.EncryptionType != ndn.EncryptionTypeAESWithCTR {
 		dec.Sender.SendData(d)
 		return
 	}
-	l := d.EncryptionInfo.KeyLocator.Name.Len()
+	l := d.MetaInfo.EncryptionKeyLocator.Name.Len()
 	keyFor := make([]lpm.Component, l+dec.pri.Name.Len()+1)
-	copy(keyFor, d.EncryptionInfo.KeyLocator.Name.Components)
+	copy(keyFor, d.MetaInfo.EncryptionKeyLocator.Name.Components)
 	keyFor[l] = []byte("FOR")
 	copy(keyFor[l+1:], dec.pri.Name.Components)
 
@@ -360,8 +362,10 @@ func (dec *decryptor) SendData(d *ndn.Data) {
 		return
 	}
 
-	cipher.NewCTR(block, d.EncryptionInfo.IV).XORKeyStream(d.Content, d.Content)
-	d.EncryptionInfo = ndn.EncryptionInfo{}
+	cipher.NewCTR(block, d.MetaInfo.EncryptionIV).XORKeyStream(d.Content, d.Content)
+	d.MetaInfo.EncryptionType = ndn.EncryptionTypeNone
+	d.MetaInfo.EncryptionKeyLocator = ndn.KeyLocator{}
+	d.MetaInfo.EncryptionIV = nil
 
 	dec.Sender.SendData(d)
 }
