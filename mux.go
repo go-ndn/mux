@@ -1,30 +1,60 @@
+// Package mux implements a light-weight NDN application framework.
 package mux
 
 import (
 	"time"
 
 	"github.com/go-ndn/log"
+	"github.com/go-ndn/lpm"
 	"github.com/go-ndn/ndn"
 )
 
+// Mux routes an interest to the handler with the longest matching prefix.
 type Mux struct {
-	*Router
-	mw Handler
+	m lpm.Matcher
+	Handler
 }
 
+// New creates a new mux.
 func New() *Mux {
-	r := NewRouter()
-	return &Mux{Router: r, mw: r}
+	m := lpm.NewThreadSafe()
+	return &Mux{
+		m: m,
+		Handler: HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+			var h Handler
+			m.MatchRaw(i.Name.Components, func(v interface{}) {
+				h = v.(Handler)
+			}, true)
+
+			if h != nil {
+				h.ServeNDN(w, i)
+			}
+		}),
+	}
 }
 
+// Use adds middleware that will be used when ServeNDN is invoked.
 func (mux *Mux) Use(m Middleware) {
-	mux.mw = m(mux.mw)
+	mux.Handler = m(mux.Handler)
 }
 
-func (mux *Mux) ServeNDN(w ndn.Sender, i *ndn.Interest) {
-	mux.mw.ServeNDN(w, i)
+// Handle adds Handler after additional route-specific middleware is applied.
+func (mux *Mux) Handle(name string, h Handler, mw ...Middleware) {
+	for _, m := range mw {
+		h = m(h)
+	}
+	mux.m.Update(name, func(v interface{}) interface{} { return h }, false)
 }
 
+// HandleFunc adds HandlerFunc like Handle.
+func (mux *Mux) HandleFunc(name string, h HandlerFunc, mw ...Middleware) {
+	mux.Handle(name, h, mw...)
+}
+
+// Register registers mux prefixes to nfd.
+//
+// If registering fails, it will retry after a period.
+// It will not return until all prefixes are registered successfully.
 func (mux *Mux) Register(w ndn.Sender, key ndn.Key) {
 	var names []string
 	mux.m.Visit(func(name string, v interface{}) interface{} {
@@ -47,6 +77,7 @@ func (mux *Mux) Register(w ndn.Sender, key ndn.Key) {
 	return
 }
 
+// Run invokes Register, and serves each incoming interest in a separate goroutine.
 func (mux *Mux) Run(w ndn.Sender, ch <-chan *ndn.Interest, key ndn.Key) {
 	mux.Register(w, key)
 	for i := range ch {

@@ -25,7 +25,7 @@ import (
 	"github.com/go-ndn/tlv"
 )
 
-// if data packet is signed, do nothing in middleware
+// if data packet is signed, do nothing in middleware.
 func signed(d *ndn.Data) bool {
 	switch d.SignatureInfo.SignatureType {
 	case ndn.SignatureTypeSHA256WithRSA:
@@ -71,6 +71,10 @@ func (c *cacher) Hijack() ndn.Sender {
 	return c.Sender
 }
 
+// RawCacher allows data packets to be served from content store directly.
+//
+// If cpy is true, data packets will be copied when they are added to and retrieved
+// from content store.
 func RawCacher(cache ndn.Cache, cpy bool) Middleware {
 	return func(next Handler) Handler {
 		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
@@ -84,8 +88,10 @@ func RawCacher(cache ndn.Cache, cpy bool) Middleware {
 	}
 }
 
+// Cacher creates a new Cacher middleware instance from the default content store.
 var Cacher = RawCacher(ndn.ContentStore, true)
 
+// Logger prints total time to serve an interest to os.Stderr.
 func Logger(next Handler) Handler {
 	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
 		before := time.Now()
@@ -132,6 +138,12 @@ func (s *segmentor) Hijack() ndn.Sender {
 	return s.Sender
 }
 
+// Segmentor breaks a data packet into many by cutting its content
+// with the given size in byte.
+//
+// FinalBlockID is set on the last segment of the data packet.
+//
+// See Assembler.
 func Segmentor(size int) Middleware {
 	return func(next Handler) Handler {
 		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
@@ -195,6 +207,11 @@ func (a *assembler) Hijack() ndn.Sender {
 	return a.Sender
 }
 
+// Assembler assembles packets broken down by Segmentor.
+//
+// FinalBlockID is unset after assembly.
+//
+// See Segmentor.
 func Assembler(next Handler) Handler {
 	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
 		next.ServeNDN(&assembler{Sender: w, Handler: next}, i)
@@ -230,12 +247,20 @@ func (v *checksumVerifier) Hijack() ndn.Sender {
 	return v.Sender
 }
 
+// ChecksumVerifier verifies packet checksum like SHA256 and CRC32C.
+//
+// If the signature type is not a supported digest type, that data packet
+// is allowed to pass through without verification.
+//
+// To verify signature, see Verifier.
 func ChecksumVerifier(next Handler) Handler {
 	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
 		next.ServeNDN(&checksumVerifier{Sender: w}, i)
 	})
 }
 
+// FileServer replaces an interest's prefix to form a file path,
+// and serves a directory on file system.
 func FileServer(from, to string) (string, Handler) {
 	return from, HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
 		content, err := ioutil.ReadFile(to + filepath.Clean(strings.TrimPrefix(i.Name.String(), from)))
@@ -249,6 +274,9 @@ func FileServer(from, to string) (string, Handler) {
 	})
 }
 
+// StaticFile serves a file that contains a data packet encoded in base64.
+//
+// It is often used to serve a certificate.
 func StaticFile(path string) (string, Handler) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -321,6 +349,10 @@ func (enc *encryptor) Hijack() ndn.Sender {
 	return enc.Sender
 }
 
+// Encryptor generates a random AES content key, and encrypts data packets with AES-128 in CTR mode.
+// Then this AES key is encrypted by peers' RSA public keys for distribution (RSA-OAEP).
+//
+// See Decryptor.
 func Encryptor(pub ...*ndn.RSAKey) Middleware {
 	return func(next Handler) Handler {
 		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
@@ -374,6 +406,13 @@ func (dec *decryptor) Hijack() ndn.Sender {
 	return dec.Sender
 }
 
+// Decryptor decrypts data packets encrypted from encryptor.
+//
+// It fetches encryped AES content key, and uses its private RSA key to decrypt this
+// AES key.
+// Later this AES key will be used to decrypt data packets.
+//
+// See Encryptor.
 func Decryptor(pri *ndn.RSAKey) Middleware {
 	return func(next Handler) Handler {
 		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
@@ -409,6 +448,9 @@ func (gz *gzipper) Hijack() ndn.Sender {
 	return gz.Sender
 }
 
+// Gzipper compresses data packets with GZIP.
+//
+// See Gunzipper.
 func Gzipper(next Handler) Handler {
 	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
 		next.ServeNDN(&gzipper{Sender: w}, i)
@@ -441,6 +483,9 @@ func (gz *gunzipper) Hijack() ndn.Sender {
 	return gz.Sender
 }
 
+// Gunzipper decompresses data packets compressed by Gzipper.
+//
+// See Gzipper.
 func Gunzipper(next Handler) Handler {
 	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
 		next.ServeNDN(&gunzipper{Sender: w}, i)
@@ -468,6 +513,9 @@ func (s *signer) Hijack() ndn.Sender {
 	return s.Sender
 }
 
+// Signer signs data packets with the given key.
+//
+// See Verifier.
 func Signer(key ndn.Key) Middleware {
 	return func(next Handler) Handler {
 		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
@@ -476,6 +524,14 @@ func Signer(key ndn.Key) Middleware {
 	}
 }
 
+// VerifyRule specifies a trust model.
+//
+// The first rule that has matching DataPattern RE2 regexp is applied.
+// If there is no rule found, verification fails, and the data packet is dropped.
+// DataPattern RE2 regexp capture transforms KeyPattern to match signature key locator.
+// Finally DataSHA256 is used to check the trust anchor.
+//
+// See https://github.com/google/re2/wiki/Syntax.
 type VerifyRule struct {
 	DataPattern string
 	re          *regexp.Regexp
@@ -554,6 +610,9 @@ func (v *verifier) Hijack() ndn.Sender {
 	return v.Sender
 }
 
+// Verifier checks packet signature.
+//
+// To verify checksum, see ChecksumVerifier.
 func Verifier(rule ...*VerifyRule) Middleware {
 	for _, r := range rule {
 		r.re = regexp.MustCompile(r.DataPattern)
@@ -584,6 +643,7 @@ func (v *versioner) Hijack() ndn.Sender {
 	return v.Sender
 }
 
+// Versioner adds timestamp version to a data packet.
 func Versioner(next Handler) Handler {
 	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
 		next.ServeNDN(&versioner{Sender: w}, i)
@@ -603,6 +663,12 @@ func (q *queuer) Hijack() ndn.Sender {
 	return q.Sender
 }
 
+// Queuer sends data packets after Handler returns.
+//
+// By default, data packets are sent as soon as SendData is invoked.
+// It is often used with RawCacher and Segmentor to ensure that all
+// segmented packets are successfully added to the content store before
+// the first segment is sent to the consumer.
 func Queuer(next Handler) Handler {
 	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
 		q := &queuer{Sender: w}
@@ -613,10 +679,18 @@ func Queuer(next Handler) Handler {
 	})
 }
 
+// Notify returns an interest name to notify that the data packet is ready.
+//
+// See Listener.
 func Notify(listener, dataName string) ndn.Name {
 	return ndn.NewName(fmt.Sprintf("%s/ACK%s", listener, dataName))
 }
 
+// Listener listens to notifications.
+//
+// The first argument of h is the data name notified from remote.
+//
+// See Notify.
 func Listener(name string, h func(string, ndn.Sender, *ndn.Interest)) (string, Handler) {
 	name += "/ACK"
 	return name, HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
