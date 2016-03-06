@@ -294,7 +294,8 @@ func StaticFile(path string) (string, Handler) {
 }
 
 type encryptor struct {
-	pub []*ndn.RSAKey
+	pub        []*ndn.RSAKey
+	keyLocator ndn.Name
 	ndn.Sender
 }
 
@@ -308,9 +309,11 @@ func (enc *encryptor) SendData(d *ndn.Data) {
 		return
 	}
 	// content key name
-	keyName := make([]lpm.Component, d.Name.Len()+1)
-	copy(keyName, d.Name.Components)
-	keyName[len(keyName)-1] = []byte("C-KEY")
+	l := enc.keyLocator.Len()
+	keyName := make([]lpm.Component, l+d.Name.Len()+1)
+	copy(keyName, enc.keyLocator.Components)
+	keyName[l] = []byte("C-KEY")
+	copy(keyName[l+1:], d.Name.Components)
 
 	ckey := make([]byte, 16)
 	rand.Read(ckey)
@@ -352,11 +355,18 @@ func (enc *encryptor) Hijack() ndn.Sender {
 // Encryptor generates a random AES content key, and encrypts data packets with AES-128 in CTR mode.
 // Then this AES key is encrypted by peers' RSA public keys for distribution (RSA-OAEP).
 //
+// It does not register keyLocator.
+//
 // See Decryptor.
-func Encryptor(pub ...*ndn.RSAKey) Middleware {
+func Encryptor(keyLocator string, pub ...*ndn.RSAKey) Middleware {
+	name := ndn.NewName(keyLocator)
 	return func(next Handler) Handler {
 		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-			next.ServeNDN(&encryptor{Sender: w, pub: pub}, i)
+			next.ServeNDN(&encryptor{
+				Sender:     w,
+				pub:        pub,
+				keyLocator: name,
+			}, i)
 		})
 	}
 }

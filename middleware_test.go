@@ -114,7 +114,7 @@ func TestMiddleware(t *testing.T) {
 	want := fakeData()
 	for i, test := range []Handler{
 		Assembler(Queuer(fakeCacher(Segmentor(1)(fakeHandler)))),
-		Decryptor(rsaKey)(Queuer(fakeCacher(Encryptor(rsaKey)(fakeHandler)))),
+		Decryptor(rsaKey)(Queuer(fakeCacher(Encryptor("/test", rsaKey)(fakeHandler)))),
 		Verifier(rule...)(certServer(Signer(signKey)(fakeHandler))),
 		Gunzipper(Gzipper(fakeHandler)),
 		Logger(fakeHandler),
