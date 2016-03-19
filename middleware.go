@@ -566,11 +566,12 @@ func (v *verifier) verify(d *ndn.Data) bool {
 
 		if rule.DataSHA256 != "" {
 			// check for anchor
-			digest, err := tlv.Hash(sha256.New, d)
+			h := sha256.New()
+			err := d.WriteTo(tlv.NewWriter(h))
 			if err != nil {
 				return false
 			}
-			return rule.DataSHA256 == fmt.Sprintf("%x", digest)
+			return rule.DataSHA256 == fmt.Sprintf("%x", h.Sum(nil))
 		}
 
 		if rule.KeyPattern != "" &&

@@ -86,12 +86,12 @@ func fakeVerifyRule(l int) (key []ndn.Key, rule []*VerifyRule, certServer Middle
 			rule[i].KeyPattern = fmt.Sprintf("/%d", i-1)
 		} else {
 			// anchor, get sha256
-			var digest []byte
-			digest, err = tlv.Hash(sha256.New, cert[i])
+			h := sha256.New()
+			err = cert[i].WriteTo(tlv.NewWriter(h))
 			if err != nil {
 				return
 			}
-			rule[i].DataSHA256 = fmt.Sprintf("%x", digest)
+			rule[i].DataSHA256 = fmt.Sprintf("%x", h.Sum(nil))
 		}
 	}
 	certServer = server(cert...)
