@@ -4,17 +4,27 @@ import "github.com/go-ndn/ndn"
 
 // Fetcher fetches data packets.
 type Fetcher struct {
-	mw []Middleware
+	Handler
 }
 
 // NewFetcher creates a new fetcher.
 func NewFetcher() *Fetcher {
-	return &Fetcher{}
+	return &Fetcher{
+		Handler: HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+			// face
+			d, ok := <-w.SendInterest(i)
+			if !ok {
+				return
+			}
+			// collector
+			w.SendData(d)
+		}),
+	}
 }
 
 // Use adds middleware that will be used when Fetch is invoked.
 func (f *Fetcher) Use(m Middleware) {
-	f.mw = append(f.mw, m)
+	f.Handler = m(f.Handler)
 }
 
 type collector struct {
@@ -32,18 +42,7 @@ func (c *collector) SendData(d *ndn.Data) {
 //
 // Additional one-time middleware will be added after the ones added by invoking Use.
 func (f *Fetcher) Fetch(remote ndn.Sender, i *ndn.Interest, mw ...Middleware) []byte {
-	h := Handler(HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-		// face
-		d, ok := <-w.SendInterest(i)
-		if !ok {
-			return
-		}
-		// collector
-		w.SendData(d)
-	}))
-	for _, m := range f.mw {
-		h = m(h)
-	}
+	h := f.Handler
 	for _, m := range mw {
 		h = m(h)
 	}
