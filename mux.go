@@ -22,7 +22,7 @@ func New() *Mux {
 		m: m,
 		Handler: HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
 			var h Handler
-			m.MatchRaw(i.Name.Components, func(v interface{}) {
+			m.Match(i.Name.Components, func(v interface{}) {
 				h = v.(Handler)
 			}, true)
 
@@ -43,7 +43,7 @@ func (mux *Mux) Handle(name string, h Handler, mw ...Middleware) {
 	for _, m := range mw {
 		h = m(h)
 	}
-	mux.m.Update(name, func(v interface{}) interface{} { return h }, false)
+	mux.m.Update(lpm.NewComponents(name), func(v interface{}) interface{} { return h }, false)
 }
 
 // HandleFunc adds HandlerFunc like Handle.
@@ -56,15 +56,12 @@ func (mux *Mux) HandleFunc(name string, h HandlerFunc, mw ...Middleware) {
 // If registering fails, it will retry after a period.
 // It will not return until all prefixes are registered successfully.
 func (mux *Mux) Register(w ndn.Sender, key ndn.Key) {
-	var names []string
-	mux.m.Visit(func(name string, v interface{}) interface{} {
-		names = append(names, name)
-		return v
-	})
-	for _, name := range names {
+	mux.m.Visit(func(name []lpm.Component, v interface{}) interface{} {
 		for {
 			err := ndn.SendControl(w, "rib", "register", &ndn.Parameters{
-				Name: ndn.NewName(name),
+				Name: ndn.Name{
+					Components: name,
+				},
 			}, key)
 			if err != nil {
 				log.Printf("fail to register %s, got %v\n", name, err)
@@ -73,8 +70,8 @@ func (mux *Mux) Register(w ndn.Sender, key ndn.Key) {
 				break
 			}
 		}
-	}
-	return
+		return v
+	})
 }
 
 // Run invokes Register, and serves each incoming interest in a separate goroutine.
