@@ -645,7 +645,7 @@ func (v *versioner) SendData(d *ndn.Data) {
 		return
 	}
 	timestamp := make([]byte, 8)
-	binary.BigEndian.PutUint64(timestamp, uint64(time.Now().UTC().UnixNano()/1000000))
+	binary.BigEndian.PutUint64(timestamp, uint64(time.Now().UnixNano()/1000000))
 	d.Name.Components = append(d.Name.Components, timestamp)
 	v.Sender.SendData(d)
 }
