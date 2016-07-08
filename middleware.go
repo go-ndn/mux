@@ -308,7 +308,13 @@ func (enc *encryptor) SendData(d *ndn.Data) {
 		enc.Sender.SendData(d)
 		return
 	}
-	// content key name
+
+	// Producer generates encrypted AES key with name: /producerName/C-KEY/dataName/FOR/consumerName
+	// for each consumer.
+	// Data packet's keyLocator is /producerName/C-KEY/dataName.
+	// When consumer receives data, it attaches /FOR/consumerName in the end to fetch encrypted AES key.
+	//
+	// This is a primitive to distribute access to one data packet.
 	l := enc.keyLocator.Len()
 	keyName := make([]lpm.Component, l+d.Name.Len()+1)
 	copy(keyName, enc.keyLocator.Components)
