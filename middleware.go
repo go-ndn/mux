@@ -89,7 +89,7 @@ func RawCacher(cache ndn.Cache, cpy bool) Middleware {
 }
 
 // Cacher creates a new Cacher middleware instance from the default content store.
-var Cacher = RawCacher(ndn.ContentStore, true)
+var Cacher = RawCacher(ndn.NewCache(65536), true)
 
 // Logger prints total time to serve an interest to os.Stderr.
 func Logger(next Handler) Handler {
