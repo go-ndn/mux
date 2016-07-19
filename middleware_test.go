@@ -148,6 +148,30 @@ func TestVersioner(t *testing.T) {
 	}
 }
 
+func TestListenNotify(t *testing.T) {
+	const (
+		producerName = "/producerName"
+		dataName     = "/data"
+	)
+
+	var count int
+	m := New()
+	m.Handle(Listener(producerName, func(name string, _ ndn.Sender, _ *ndn.Interest) {
+		count++
+		if name != dataName {
+			t.Fatalf("expect %s, got %s", dataName, name)
+		}
+	}))
+
+	m.ServeNDN(nil, &ndn.Interest{
+		Name: Notify(producerName, dataName),
+	})
+
+	if count != 1 {
+		t.Fatalf("expect 1, got %d", count)
+	}
+}
+
 func TestHijacker(t *testing.T) {
 	c := &collector{}
 
