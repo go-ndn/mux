@@ -12,6 +12,7 @@ type fakeSender struct{}
 func (s fakeSender) SendInterest(_ *ndn.Interest) <-chan *ndn.Data {
 	ch := make(chan *ndn.Data, 1)
 	ch <- fakeData()
+	close(ch)
 	return ch
 }
 
