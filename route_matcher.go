@@ -19,9 +19,6 @@ func (n *routeNode) empty() bool {
 
 func (n *routeNode) update(key []lpm.Component, depth int, f func([]lpm.Component, Handler) Handler, exist, all bool) {
 	try := func() {
-		if depth == 0 {
-			return
-		}
 		if !exist || !routeNodeValEmpty(n.val) {
 			n.val = f(key[:depth], n.val)
 		}
@@ -61,9 +58,6 @@ func (n *routeNode) update(key []lpm.Component, depth int, f func([]lpm.Componen
 
 func (n *routeNode) match(key []lpm.Component, depth int, f func(Handler), exist bool) {
 	try := func() {
-		if depth == 0 {
-			return
-		}
 		if !exist || !routeNodeValEmpty(n.val) {
 			f(n.val)
 		}
