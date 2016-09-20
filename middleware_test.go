@@ -59,15 +59,15 @@ func fakeCacher(next Handler) Handler {
 	return RawCacher(ndn.NewCache(16), true)(next)
 }
 
-func fakeVerifyRule(l int) (key []ndn.Key, rule []*VerifyRule, certServer Middleware, err error) {
-	key = make([]ndn.Key, l)
-	rule = make([]*VerifyRule, l)
+func fakeVerifyRule(l int) ([]ndn.Key, []*VerifyRule, Middleware, error) {
+	key := make([]ndn.Key, l)
+	rule := make([]*VerifyRule, l)
 	cert := make([]*ndn.Data, l)
 	for i := 0; i < l; i++ {
 		var pri *rsa.PrivateKey
-		pri, err = rsa.GenerateKey(rand.Reader, 1024)
+		pri, err := rsa.GenerateKey(rand.Reader, 1024)
 		if err != nil {
-			return
+			return nil, nil, nil, err
 		}
 		key[i] = &ndn.RSAKey{
 			Name:       ndn.NewName(fmt.Sprintf("/%d", i)),
@@ -78,7 +78,7 @@ func fakeVerifyRule(l int) (key []ndn.Key, rule []*VerifyRule, certServer Middle
 		}
 		cert[i], err = ndn.CertificateToData(key[i])
 		if err != nil {
-			return
+			return nil, nil, nil, err
 		}
 		if i > 0 {
 			// sign current key vith previous key
@@ -89,13 +89,12 @@ func fakeVerifyRule(l int) (key []ndn.Key, rule []*VerifyRule, certServer Middle
 			h := sha256.New()
 			err = cert[i].WriteTo(tlv.NewWriter(h))
 			if err != nil {
-				return
+				return nil, nil, nil, err
 			}
 			rule[i].DataSHA256 = fmt.Sprintf("%x", h.Sum(nil))
 		}
 	}
-	certServer = server(cert...)
-	return
+	return key, rule, server(cert...), nil
 }
 
 func TestMiddleware(t *testing.T) {

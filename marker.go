@@ -17,13 +17,11 @@ func encodeMarkedNum(marker byte, v uint64) []byte {
 	return b[:n+1]
 }
 
-func decodeMarkedNum(marker byte, b []byte) (v uint64, err error) {
+func decodeMarkedNum(marker byte, b []byte) (uint64, error) {
 	if len(b) == 0 || b[0] != marker {
-		err = io.ErrShortBuffer
-		return
+		return 0, io.ErrShortBuffer
 	}
-	v = decodeUint64(b[1:])
-	return
+	return decodeUint64(b[1:]), nil
 }
 
 func decodeUint64(b []byte) uint64 {
