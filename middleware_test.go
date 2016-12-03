@@ -166,8 +166,8 @@ func TestListenNotify(t *testing.T) {
 		Name: Notify(producerName, dataName),
 	})
 
-	if count != 1 {
-		t.Fatalf("expect 1, got %d", count)
+	if want := 1; count != want {
+		t.Fatalf("expect %d, got %d", want, count)
 	}
 }
 

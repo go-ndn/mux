@@ -55,8 +55,8 @@ func TestMuxHandle(t *testing.T) {
 		Name: ndn.NewName("/A/B"),
 	})
 
-	if count != 1 {
-		t.Fatalf("expect 1, got %d", count)
+	if want := 1; count != want {
+		t.Fatalf("expect %d, got %d", want, count)
 	}
 }
 
