@@ -73,9 +73,12 @@ func TestMuxRegister(t *testing.T) {
 	fw := &fakeForwarder{
 		registered: make(map[string]struct{}),
 	}
-	m.Register(fw, &ndn.RSAKey{
+	err = m.Register(fw, &ndn.RSAKey{
 		PrivateKey: pri,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	want := map[string]struct{}{
 		"/A": {},

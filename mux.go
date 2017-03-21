@@ -5,7 +5,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-ndn/log"
 	"github.com/go-ndn/lpm"
 	"github.com/go-ndn/ndn"
 )
@@ -56,34 +55,42 @@ func (mux *Mux) HandleFunc(name string, h HandlerFunc, mw ...Middleware) {
 }
 
 // Register registers mux prefixes to nfd.
-//
-// If registering fails, it will retry after a period.
-// It will not return until all prefixes are registered successfully.
-func (mux *Mux) Register(w ndn.Sender, key ndn.Key) {
+func (mux *Mux) Register(w ndn.Sender, key ndn.Key) error {
+	var names [][]lpm.Component
 	mux.mu.Lock()
 	mux.routeMatcher.Visit(func(name []lpm.Component, v Handler) Handler {
-		for {
-			err := ndn.SendControl(w, "rib", "register", &ndn.Parameters{
-				Name: ndn.Name{
-					Components: name,
-				},
-			}, key)
-			if err != nil {
-				log.Printf("fail to register %s, got %v\n", name, err)
-				time.Sleep(time.Second)
-			} else {
-				break
-			}
-		}
+		cpy := make([]lpm.Component, len(name))
+		copy(cpy, name)
+		names = append(names, cpy)
 		return v
 	})
 	mux.mu.Unlock()
+
+	for _, name := range names {
+		err := ndn.SendControl(w, "rib", "register", &ndn.Parameters{
+			Name: ndn.Name{Components: name},
+		}, key)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// Run invokes Register, and serves each incoming interest in a separate goroutine.
+// Run invokes Register periodically, and serves each incoming interest in a separate goroutine.
 func (mux *Mux) Run(w ndn.Sender, ch <-chan *ndn.Interest, key ndn.Key) {
 	mux.Register(w, key)
-	for i := range ch {
-		go mux.ServeNDN(w, i)
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case i, ok := <-ch:
+			if !ok {
+				return
+			}
+			go mux.ServeNDN(w, i)
+		case <-ticker.C:
+			go mux.Register(w, key)
+		}
 	}
 }
