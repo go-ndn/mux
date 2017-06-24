@@ -9,14 +9,11 @@ import (
 
 type fakeSender struct{}
 
-func (s fakeSender) SendInterest(_ *ndn.Interest) <-chan *ndn.Data {
-	ch := make(chan *ndn.Data, 1)
-	ch <- fakeData()
-	close(ch)
-	return ch
+func (s fakeSender) SendInterest(_ *ndn.Interest) (*ndn.Data, error) {
+	return fakeData(), nil
 }
 
-func (s fakeSender) SendData(_ *ndn.Data) {}
+func (s fakeSender) SendData(_ *ndn.Data) error { return nil }
 
 func TestFetcher(t *testing.T) {
 	f := NewFetcher()

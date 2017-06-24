@@ -16,14 +16,11 @@ type fakeForwarder struct {
 	registered map[string]struct{}
 }
 
-func (f *fakeForwarder) SendInterest(i *ndn.Interest) <-chan *ndn.Data {
-	ch := make(chan *ndn.Data, 1)
-	defer close(ch)
-
+func (f *fakeForwarder) SendInterest(i *ndn.Interest) (*ndn.Data, error) {
 	cmd := new(ndn.Command)
 	err := tlv.Copy(cmd, &i.Name)
 	if err != nil {
-		return ch
+		return nil, err
 	}
 	f.registered[cmd.Parameters.Parameters.Name.String()] = struct{}{}
 
@@ -32,16 +29,15 @@ func (f *fakeForwarder) SendInterest(i *ndn.Interest) <-chan *ndn.Data {
 		StatusText: "OK",
 	}, 101)
 	if err != nil {
-		return ch
+		return nil, err
 	}
-	ch <- &ndn.Data{
+	return &ndn.Data{
 		Name:    i.Name,
 		Content: content,
-	}
-	return ch
+	}, nil
 }
 
-func (f *fakeForwarder) SendData(_ *ndn.Data) {}
+func (f *fakeForwarder) SendData(_ *ndn.Data) error { return nil }
 
 func TestMuxHandle(t *testing.T) {
 	var count int
