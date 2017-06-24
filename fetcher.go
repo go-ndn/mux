@@ -12,8 +12,8 @@ func NewFetcher() *Fetcher {
 	return &Fetcher{
 		Handler: HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
 			// face
-			d, ok := <-w.SendInterest(i)
-			if !ok {
+			d, err := w.SendInterest(i)
+			if err != nil {
 				return
 			}
 			// collector
@@ -32,10 +32,11 @@ type collector struct {
 	*ndn.Data
 }
 
-func (c *collector) SendData(d *ndn.Data) {
+func (c *collector) SendData(d *ndn.Data) error {
 	if c.Data == nil {
 		c.Data = d
 	}
+	return nil
 }
 
 // Fetch applies added middleware, and fetches a data packet in the end.

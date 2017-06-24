@@ -43,27 +43,31 @@ type cacher struct {
 	cpy bool
 }
 
-func (c *cacher) SendData(d *ndn.Data) {
+func (c *cacher) SendData(d *ndn.Data) error {
 	if d.MetaInfo.CacheHint == ndn.CacheHintNoCache {
 		// producer indicates that this packet should not be cached
-		if c.Sender != nil {
-			c.Sender.SendData(d)
+		if c.Sender == nil {
+			return nil
 		}
-		return
+		return c.Sender.SendData(d)
 	}
 	c.Add(d)
-	if c.Sender != nil {
-		copySend(c.Sender, d, c.cpy)
+	if c.Sender == nil {
+		return nil
 	}
+	return copySend(c.Sender, d, c.cpy)
 }
 
-func copySend(w ndn.Sender, d *ndn.Data, cpy bool) {
+func copySend(w ndn.Sender, d *ndn.Data, cpy bool) error {
 	if cpy {
 		copied := new(ndn.Data)
-		tlv.Copy(copied, d)
-		w.SendData(copied)
+		err := tlv.Copy(copied, d)
+		if err != nil {
+			return err
+		}
+		return w.SendData(copied)
 	} else {
-		w.SendData(d)
+		return w.SendData(d)
 	}
 }
 
@@ -105,10 +109,9 @@ type segmentor struct {
 	size int
 }
 
-func (s *segmentor) SendData(d *ndn.Data) {
+func (s *segmentor) SendData(d *ndn.Data) error {
 	if signed(d) {
-		s.Sender.SendData(d)
-		return
+		return s.Sender.SendData(d)
 	}
 	l := d.Name.Len()
 	for i := 0; i == 0 || i*s.size < len(d.Content); i++ {
@@ -130,8 +133,12 @@ func (s *segmentor) SendData(d *ndn.Data) {
 			seg.MetaInfo.FinalBlockID.Component = segNum
 		}
 
-		s.Sender.SendData(seg)
+		err := s.Sender.SendData(seg)
+		if err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func (s *segmentor) Hijack() ndn.Sender {
@@ -159,20 +166,19 @@ type assembler struct {
 	blockID uint64
 }
 
-func (a *assembler) SendData(d *ndn.Data) {
+func (a *assembler) SendData(d *ndn.Data) error {
 	l := d.Name.Len()
 	if l == 0 {
-		return
+		return nil
 	}
 	blockID, err := decodeMarkedNum(segmentMarker, d.Name.Components[l-1])
 	if err != nil {
 		// not segmented
-		a.Sender.SendData(d)
-		return
+		return a.Sender.SendData(d)
 	}
 	// check if this block is requested
 	if blockID != a.blockID {
-		return
+		return nil
 	}
 	a.blockID++
 
@@ -191,8 +197,7 @@ func (a *assembler) SendData(d *ndn.Data) {
 			assembled.MetaInfo.FinalBlockID.Component = assembled.Name.Components[l-2]
 		}
 
-		a.Sender.SendData(assembled)
-		return
+		return a.Sender.SendData(assembled)
 	}
 
 	// more blocks
@@ -201,6 +206,7 @@ func (a *assembler) SendData(d *ndn.Data) {
 	copy(seg.Name.Components, d.Name.Components[:l-1])
 	seg.Name.Components[l-1] = encodeMarkedNum(segmentMarker, a.blockID)
 	a.ServeNDN(a, seg)
+	return nil
 }
 
 func (a *assembler) Hijack() ndn.Sender {
@@ -222,7 +228,7 @@ type checksumVerifier struct {
 	ndn.Sender
 }
 
-func (v *checksumVerifier) SendData(d *ndn.Data) {
+func (v *checksumVerifier) SendData(d *ndn.Data) error {
 	var f func() hash.Hash
 	switch d.SignatureInfo.SignatureType {
 	case ndn.SignatureTypeDigestSHA256:
@@ -230,17 +236,16 @@ func (v *checksumVerifier) SendData(d *ndn.Data) {
 	case ndn.SignatureTypeDigestCRC32C:
 		f = ndn.NewCRC32C
 	default:
-		v.Sender.SendData(d)
-		return
+		return v.Sender.SendData(d)
 	}
 	digest, err := tlv.Hash(f, d)
 	if err != nil {
-		return
+		return err
 	}
 	if !bytes.Equal(digest, d.SignatureValue) {
-		return
+		return nil
 	}
-	v.Sender.SendData(d)
+	return v.Sender.SendData(d)
 }
 
 func (v *checksumVerifier) Hijack() ndn.Sender {
@@ -299,14 +304,12 @@ type encryptor struct {
 	ndn.Sender
 }
 
-func (enc *encryptor) SendData(d *ndn.Data) {
+func (enc *encryptor) SendData(d *ndn.Data) error {
 	if signed(d) {
-		enc.Sender.SendData(d)
-		return
+		return enc.Sender.SendData(d)
 	}
 	if d.MetaInfo.EncryptionType != ndn.EncryptionTypeNone {
-		enc.Sender.SendData(d)
-		return
+		return enc.Sender.SendData(d)
 	}
 
 	// Producer generates encrypted AES key with name: /producerName/C-KEY/dataName/FOR/consumerName
@@ -322,20 +325,29 @@ func (enc *encryptor) SendData(d *ndn.Data) {
 	copy(keyName[l+1:], d.Name.Components)
 
 	ckey := make([]byte, 16)
-	rand.Read(ckey)
+	_, err := rand.Read(ckey)
+	if err != nil {
+		return err
+	}
 
 	// AES-128 CTR
 	d.MetaInfo.EncryptionType = ndn.EncryptionTypeAESWithCTR
 	d.MetaInfo.EncryptionKeyLocator.Name.Components = keyName
 	d.MetaInfo.EncryptionIV = make([]byte, aes.BlockSize)
-	rand.Read(d.MetaInfo.EncryptionIV)
+	_, err = rand.Read(d.MetaInfo.EncryptionIV)
+	if err != nil {
+		return err
+	}
 	block, err := aes.NewCipher(ckey)
 	if err != nil {
-		return
+		return err
 	}
 	cipher.NewCTR(block, d.MetaInfo.EncryptionIV).XORKeyStream(d.Content, d.Content)
 
-	enc.Sender.SendData(d)
+	err = enc.Sender.SendData(d)
+	if err != nil {
+		return err
+	}
 
 	// encrypt content key with RSA-OAEP
 	for _, pub := range enc.pub {
@@ -350,8 +362,12 @@ func (enc *encryptor) SendData(d *ndn.Data) {
 		if err != nil {
 			continue
 		}
-		enc.Sender.SendData(dkey)
+		err := enc.Sender.SendData(dkey)
+		if err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func (enc *encryptor) Hijack() ndn.Sender {
@@ -383,10 +399,9 @@ type decryptor struct {
 	ndn.Sender
 }
 
-func (dec *decryptor) SendData(d *ndn.Data) {
+func (dec *decryptor) SendData(d *ndn.Data) error {
 	if d.MetaInfo.EncryptionType != ndn.EncryptionTypeAESWithCTR {
-		dec.Sender.SendData(d)
-		return
+		return dec.Sender.SendData(d)
 	}
 	l := d.MetaInfo.EncryptionKeyLocator.Name.Len()
 	keyFor := make([]lpm.Component, l+dec.pri.Name.Len()+1)
@@ -397,17 +412,17 @@ func (dec *decryptor) SendData(d *ndn.Data) {
 	c := &collector{Sender: dec.Sender}
 	dec.ServeNDN(c, &ndn.Interest{Name: ndn.Name{Components: keyFor}})
 	if c.Data == nil {
-		return
+		return nil
 	}
 
 	ckey, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, dec.pri.PrivateKey, c.Data.Content, nil)
 	if err != nil {
-		return
+		return err
 	}
 
 	block, err := aes.NewCipher(ckey)
 	if err != nil {
-		return
+		return err
 	}
 
 	cipher.NewCTR(block, d.MetaInfo.EncryptionIV).XORKeyStream(d.Content, d.Content)
@@ -415,7 +430,7 @@ func (dec *decryptor) SendData(d *ndn.Data) {
 	d.MetaInfo.EncryptionKeyLocator = ndn.KeyLocator{}
 	d.MetaInfo.EncryptionIV = nil
 
-	dec.Sender.SendData(d)
+	return dec.Sender.SendData(d)
 }
 
 func (dec *decryptor) Hijack() ndn.Sender {
@@ -441,23 +456,27 @@ type gzipper struct {
 	ndn.Sender
 }
 
-func (gz *gzipper) SendData(d *ndn.Data) {
+func (gz *gzipper) SendData(d *ndn.Data) error {
 	if signed(d) {
-		gz.Sender.SendData(d)
-		return
+		return gz.Sender.SendData(d)
 	}
 	if d.MetaInfo.CompressionType != ndn.CompressionTypeNone {
-		gz.Sender.SendData(d)
-		return
+		return gz.Sender.SendData(d)
 	}
 	buf := new(bytes.Buffer)
 	gzw := gzip.NewWriter(buf)
-	gzw.Write(d.Content)
-	gzw.Close()
+	_, err := gzw.Write(d.Content)
+	if err != nil {
+		return err
+	}
+	err = gzw.Close()
+	if err != nil {
+		return err
+	}
 
 	d.MetaInfo.CompressionType = ndn.CompressionTypeGZIP
 	d.Content = buf.Bytes()
-	gz.Sender.SendData(d)
+	return gz.Sender.SendData(d)
 }
 
 func (gz *gzipper) Hijack() ndn.Sender {
@@ -477,22 +496,21 @@ type gunzipper struct {
 	ndn.Sender
 }
 
-func (gz *gunzipper) SendData(d *ndn.Data) {
+func (gz *gunzipper) SendData(d *ndn.Data) error {
 	if d.MetaInfo.CompressionType != ndn.CompressionTypeGZIP {
-		gz.Sender.SendData(d)
-		return
+		return gz.Sender.SendData(d)
 	}
 	gzr, err := gzip.NewReader(bytes.NewReader(d.Content))
 	if err != nil {
-		return
+		return err
 	}
+	defer gzr.Close()
 	buf := new(bytes.Buffer)
 	buf.ReadFrom(gzr)
-	gzr.Close()
 
 	d.MetaInfo.CompressionType = ndn.CompressionTypeNone
 	d.Content = buf.Bytes()
-	gz.Sender.SendData(d)
+	return gz.Sender.SendData(d)
 }
 
 func (gz *gunzipper) Hijack() ndn.Sender {
@@ -513,16 +531,15 @@ type signer struct {
 	ndn.Sender
 }
 
-func (s *signer) SendData(d *ndn.Data) {
+func (s *signer) SendData(d *ndn.Data) error {
 	if signed(d) {
-		s.Sender.SendData(d)
-		return
+		return s.Sender.SendData(d)
 	}
 	err := ndn.SignData(s, d)
 	if err != nil {
-		return
+		return err
 	}
-	s.Sender.SendData(d)
+	return s.Sender.SendData(d)
 }
 
 func (s *signer) Hijack() ndn.Sender {
@@ -608,7 +625,7 @@ func (v *verifier) verify(d *ndn.Data) bool {
 	return false
 }
 
-func (v *verifier) SendData(d *ndn.Data) {
+func (v *verifier) SendData(d *ndn.Data) error {
 	name := d.Name.String()
 	for _, rule := range v.rule {
 		if !rule.re.MatchString(name) {
@@ -616,11 +633,11 @@ func (v *verifier) SendData(d *ndn.Data) {
 		}
 		// if any rule matches, recursive validation is enforced
 		if v.verify(d) {
-			v.Sender.SendData(d)
+			return v.Sender.SendData(d)
 		}
-		return
+		return nil
 	}
-	v.Sender.SendData(d)
+	return v.Sender.SendData(d)
 }
 
 func (v *verifier) Hijack() ndn.Sender {
@@ -645,15 +662,14 @@ type versioner struct {
 	ndn.Sender
 }
 
-func (v *versioner) SendData(d *ndn.Data) {
+func (v *versioner) SendData(d *ndn.Data) error {
 	if signed(d) {
-		v.Sender.SendData(d)
-		return
+		return v.Sender.SendData(d)
 	}
 	timestamp := make([]byte, 8)
 	binary.BigEndian.PutUint64(timestamp, uint64(time.Now().UnixNano()/1000000))
 	d.Name.Components = append(d.Name.Components, timestamp)
-	v.Sender.SendData(d)
+	return v.Sender.SendData(d)
 }
 
 func (v *versioner) Hijack() ndn.Sender {
@@ -672,8 +688,9 @@ type queuer struct {
 	d []*ndn.Data
 }
 
-func (q *queuer) SendData(d *ndn.Data) {
+func (q *queuer) SendData(d *ndn.Data) error {
 	q.d = append(q.d, d)
+	return nil
 }
 
 func (q *queuer) Hijack() ndn.Sender {
