@@ -25,9 +25,9 @@ func (p *Publisher) Use(m Middleware) {
 // Publish applies added middleware, and publishes data packets to content store in the end.
 //
 // Additional one-time middleware will be added after the ones added by invoking Use.
-func (p *Publisher) Publish(d *ndn.Data, mw ...Middleware) {
-	h := Handler(HandlerFunc(func(w ndn.Sender, _ *ndn.Interest) {
-		w.SendData(d)
+func (p *Publisher) Publish(d *ndn.Data, mw ...Middleware) error {
+	h := Handler(HandlerFunc(func(w ndn.Sender, _ *ndn.Interest) error {
+		return w.SendData(d)
 	}))
 	for _, m := range p.mw {
 		h = m(h)
@@ -35,5 +35,5 @@ func (p *Publisher) Publish(d *ndn.Data, mw ...Middleware) {
 	for _, m := range mw {
 		h = m(h)
 	}
-	h.ServeNDN(&cacher{Cache: p.Cache}, nil)
+	return h.ServeNDN(&cacher{Cache: p.Cache}, nil)
 }

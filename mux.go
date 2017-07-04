@@ -19,7 +19,7 @@ type Mux struct {
 // New creates a new mux.
 func New() *Mux {
 	mux := new(Mux)
-	mux.Handler = HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+	mux.Handler = HandlerFunc(func(w ndn.Sender, i *ndn.Interest) error {
 		var h Handler
 		mux.mu.RLock()
 		mux.Match(i.Name.Components, func(v Handler) {
@@ -28,8 +28,9 @@ func New() *Mux {
 		mux.mu.RUnlock()
 
 		if h != nil {
-			h.ServeNDN(w, i)
+			return h.ServeNDN(w, i)
 		}
+		return nil
 	})
 	return mux
 }

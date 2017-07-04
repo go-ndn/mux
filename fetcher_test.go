@@ -19,7 +19,10 @@ func TestFetcher(t *testing.T) {
 	f := NewFetcher()
 	f.Use(fakeMiddleware)
 	want := fakeData().Content
-	got := f.Fetch(fakeSender{}, nil, fakeMiddleware)
+	got, err := f.Fetch(fakeSender{}, nil, fakeMiddleware)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !bytes.Equal(want, got) {
 		t.Fatalf("expect %v, got %v", want, got)
 	}

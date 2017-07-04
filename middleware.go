@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash"
 	"io/ioutil"
@@ -66,9 +67,8 @@ func copySend(w ndn.Sender, d *ndn.Data, cpy bool) error {
 			return err
 		}
 		return w.SendData(copied)
-	} else {
-		return w.SendData(d)
 	}
+	return w.SendData(d)
 }
 
 func (c *cacher) Hijack() ndn.Sender {
@@ -81,13 +81,12 @@ func (c *cacher) Hijack() ndn.Sender {
 // from content store.
 func RawCacher(cache ndn.Cache, cpy bool) Middleware {
 	return func(next Handler) Handler {
-		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) error {
 			d := cache.Get(i)
 			if d == nil {
-				next.ServeNDN(&cacher{Sender: w, Cache: cache, cpy: cpy}, i)
-			} else {
-				copySend(w, d, cpy)
+				return next.ServeNDN(&cacher{Sender: w, Cache: cache, cpy: cpy}, i)
 			}
+			return copySend(w, d, cpy)
 		})
 	}
 }
@@ -97,10 +96,12 @@ var Cacher = RawCacher(ndn.NewCache(65536), true)
 
 // Logger prints total time to serve an interest to os.Stderr.
 func Logger(next Handler) Handler {
-	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) error {
 		before := time.Now()
-		next.ServeNDN(w, i)
-		log.Printf("%s completed in %s\n", i.Name, time.Since(before))
+		defer func() {
+			log.Printf("%s completed in %s\n", i.Name, time.Since(before))
+		}()
+		return next.ServeNDN(w, i)
 	})
 }
 
@@ -153,8 +154,8 @@ func (s *segmentor) Hijack() ndn.Sender {
 // See Assembler.
 func Segmentor(size int) Middleware {
 	return func(next Handler) Handler {
-		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-			next.ServeNDN(&segmentor{Sender: w, size: size}, i)
+		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) error {
+			return next.ServeNDN(&segmentor{Sender: w, size: size}, i)
 		})
 	}
 }
@@ -205,8 +206,7 @@ func (a *assembler) SendData(d *ndn.Data) error {
 	seg.Name.Components = make([]lpm.Component, l)
 	copy(seg.Name.Components, d.Name.Components[:l-1])
 	seg.Name.Components[l-1] = encodeMarkedNum(segmentMarker, a.blockID)
-	a.ServeNDN(a, seg)
-	return nil
+	return a.ServeNDN(a, seg)
 }
 
 func (a *assembler) Hijack() ndn.Sender {
@@ -219,14 +219,18 @@ func (a *assembler) Hijack() ndn.Sender {
 //
 // See Segmentor.
 func Assembler(next Handler) Handler {
-	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-		next.ServeNDN(&assembler{Sender: w, Handler: next}, i)
+	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) error {
+		return next.ServeNDN(&assembler{Sender: w, Handler: next}, i)
 	})
 }
 
 type checksumVerifier struct {
 	ndn.Sender
 }
+
+var (
+	ErrInvalidChecksum = errors.New("invalid checksum")
+)
 
 func (v *checksumVerifier) SendData(d *ndn.Data) error {
 	var f func() hash.Hash
@@ -243,7 +247,7 @@ func (v *checksumVerifier) SendData(d *ndn.Data) error {
 		return err
 	}
 	if !bytes.Equal(digest, d.SignatureValue) {
-		return nil
+		return ErrInvalidChecksum
 	}
 	return v.Sender.SendData(d)
 }
@@ -259,20 +263,20 @@ func (v *checksumVerifier) Hijack() ndn.Sender {
 //
 // To verify signature, see Verifier.
 func ChecksumVerifier(next Handler) Handler {
-	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-		next.ServeNDN(&checksumVerifier{Sender: w}, i)
+	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) error {
+		return next.ServeNDN(&checksumVerifier{Sender: w}, i)
 	})
 }
 
 // FileServer replaces an interest's prefix to form a file path,
 // and serves a directory on file system.
 func FileServer(from, to string) (string, Handler) {
-	return from, HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+	return from, HandlerFunc(func(w ndn.Sender, i *ndn.Interest) error {
 		content, err := ioutil.ReadFile(to + filepath.Clean(strings.TrimPrefix(i.Name.String(), from)))
 		if err != nil {
-			return
+			return err
 		}
-		w.SendData(&ndn.Data{
+		return w.SendData(&ndn.Data{
 			Name:    i.Name,
 			Content: content,
 		})
@@ -293,8 +297,8 @@ func StaticFile(path string) (string, Handler) {
 	if err != nil {
 		panic(err)
 	}
-	return d.Name.String(), HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-		w.SendData(d)
+	return d.Name.String(), HandlerFunc(func(w ndn.Sender, i *ndn.Interest) error {
+		return w.SendData(d)
 	})
 }
 
@@ -360,7 +364,7 @@ func (enc *encryptor) SendData(d *ndn.Data) error {
 		dkey.Name.Components = keyFor
 		dkey.Content, err = rsa.EncryptOAEP(sha256.New(), rand.Reader, &pub.PrivateKey.PublicKey, ckey, nil)
 		if err != nil {
-			continue
+			return err
 		}
 		err := enc.Sender.SendData(dkey)
 		if err != nil {
@@ -383,8 +387,8 @@ func (enc *encryptor) Hijack() ndn.Sender {
 func Encryptor(keyLocator string, pub ...*ndn.RSAKey) Middleware {
 	name := ndn.NewName(keyLocator)
 	return func(next Handler) Handler {
-		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-			next.ServeNDN(&encryptor{
+		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) error {
+			return next.ServeNDN(&encryptor{
 				Sender:     w,
 				pub:        pub,
 				keyLocator: name,
@@ -410,7 +414,10 @@ func (dec *decryptor) SendData(d *ndn.Data) error {
 	copy(keyFor[l+1:], dec.pri.Name.Components)
 
 	c := &collector{Sender: dec.Sender}
-	dec.ServeNDN(c, &ndn.Interest{Name: ndn.Name{Components: keyFor}})
+	err := dec.ServeNDN(c, &ndn.Interest{Name: ndn.Name{Components: keyFor}})
+	if err != nil {
+		return err
+	}
 	if c.Data == nil {
 		return nil
 	}
@@ -446,8 +453,8 @@ func (dec *decryptor) Hijack() ndn.Sender {
 // See Encryptor.
 func Decryptor(pri *ndn.RSAKey) Middleware {
 	return func(next Handler) Handler {
-		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-			next.ServeNDN(&decryptor{Sender: w, pri: pri, Handler: next}, i)
+		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) error {
+			return next.ServeNDN(&decryptor{Sender: w, pri: pri, Handler: next}, i)
 		})
 	}
 }
@@ -487,8 +494,8 @@ func (gz *gzipper) Hijack() ndn.Sender {
 //
 // See Gunzipper.
 func Gzipper(next Handler) Handler {
-	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-		next.ServeNDN(&gzipper{Sender: w}, i)
+	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) error {
+		return next.ServeNDN(&gzipper{Sender: w}, i)
 	})
 }
 
@@ -521,8 +528,8 @@ func (gz *gunzipper) Hijack() ndn.Sender {
 //
 // See Gzipper.
 func Gunzipper(next Handler) Handler {
-	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-		next.ServeNDN(&gunzipper{Sender: w}, i)
+	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) error {
+		return next.ServeNDN(&gunzipper{Sender: w}, i)
 	})
 }
 
@@ -551,8 +558,8 @@ func (s *signer) Hijack() ndn.Sender {
 // See Verifier.
 func Signer(key ndn.Key) Middleware {
 	return func(next Handler) Handler {
-		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-			next.ServeNDN(&signer{Sender: w, Key: key}, i)
+		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) error {
+			return next.ServeNDN(&signer{Sender: w, Key: key}, i)
 		})
 	}
 }
@@ -579,7 +586,13 @@ type verifier struct {
 	rule []*VerifyRule
 }
 
-func (v *verifier) verify(d *ndn.Data) bool {
+var (
+	ErrUntrustedKeyName = errors.New("untrusted key name")
+	ErrUntrustedData    = errors.New("untrusted data")
+	ErrNoData           = errors.New("no data")
+)
+
+func (v *verifier) verify(d *ndn.Data) error {
 	name := d.Name.String()
 	keyName := d.SignatureInfo.KeyLocator.Name.String()
 	for _, rule := range v.rule {
@@ -592,37 +605,43 @@ func (v *verifier) verify(d *ndn.Data) bool {
 			h := sha256.New()
 			err := d.WriteTo(tlv.NewWriter(h))
 			if err != nil {
-				return false
+				return err
 			}
-			return rule.DataSHA256 == fmt.Sprintf("%x", h.Sum(nil))
+			if rule.DataSHA256 != fmt.Sprintf("%x", h.Sum(nil)) {
+				return ErrInvalidChecksum
+			}
+			return nil
 		}
 
 		if rule.KeyPattern != "" &&
 			!regexp.MustCompile(rule.re.ReplaceAllString(name, rule.KeyPattern)).MatchString(keyName) {
-			// invalid key name
-			return false
+			return ErrUntrustedKeyName
 		}
 		c := &collector{Sender: v.Sender}
-		v.ServeNDN(c, &ndn.Interest{Name: d.SignatureInfo.KeyLocator.Name})
+		err := v.ServeNDN(c, &ndn.Interest{Name: d.SignatureInfo.KeyLocator.Name})
+		if err != nil {
+			return err
+		}
 		if c.Data == nil {
 			// cannot fetch key
-			return false
+			return ErrNoData
 		}
 
 		key, err := ndn.CertificateFromData(c.Data)
 		if err != nil {
 			// invalid key
-			return false
+			return err
 		}
 
-		if ndn.VerifyData(key, d) != nil {
+		err = ndn.VerifyData(key, d)
+		if err != nil {
 			// key cannot verify data
-			return false
+			return err
 		}
 		// recursively verify key
 		return v.verify(c.Data)
 	}
-	return false
+	return ErrUntrustedData
 }
 
 func (v *verifier) SendData(d *ndn.Data) error {
@@ -632,10 +651,11 @@ func (v *verifier) SendData(d *ndn.Data) error {
 			continue
 		}
 		// if any rule matches, recursive validation is enforced
-		if v.verify(d) {
-			return v.Sender.SendData(d)
+		err := v.verify(d)
+		if err != nil {
+			return err
 		}
-		return nil
+		return v.Sender.SendData(d)
 	}
 	return v.Sender.SendData(d)
 }
@@ -652,8 +672,8 @@ func Verifier(rule ...*VerifyRule) Middleware {
 		r.re = regexp.MustCompile(r.DataPattern)
 	}
 	return func(next Handler) Handler {
-		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-			next.ServeNDN(&verifier{Sender: w, Handler: next, rule: rule}, i)
+		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) error {
+			return next.ServeNDN(&verifier{Sender: w, Handler: next, rule: rule}, i)
 		})
 	}
 }
@@ -678,8 +698,8 @@ func (v *versioner) Hijack() ndn.Sender {
 
 // Versioner adds timestamp version to a data packet.
 func Versioner(next Handler) Handler {
-	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-		next.ServeNDN(&versioner{Sender: w}, i)
+	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) error {
+		return next.ServeNDN(&versioner{Sender: w}, i)
 	})
 }
 
@@ -704,12 +724,19 @@ func (q *queuer) Hijack() ndn.Sender {
 // segmented packets are successfully added to the content store before
 // the first segment is sent to the consumer.
 func Queuer(next Handler) Handler {
-	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) error {
 		q := &queuer{Sender: w}
-		next.ServeNDN(q, i)
-		for _, d := range q.d {
-			w.SendData(d)
+		err := next.ServeNDN(q, i)
+		if err != nil {
+			return err
 		}
+		for _, d := range q.d {
+			err = w.SendData(d)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
@@ -725,9 +752,9 @@ func Notify(listener, dataName string) ndn.Name {
 // The first argument of h is the data name notified from remote.
 //
 // See Notify.
-func Listener(name string, h func(string, ndn.Sender, *ndn.Interest)) (string, Handler) {
+func Listener(name string, h func(string, ndn.Sender, *ndn.Interest) error) (string, Handler) {
 	name += "/ACK"
-	return name, HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
-		h(strings.TrimPrefix(i.Name.String(), name), w, i)
+	return name, HandlerFunc(func(w ndn.Sender, i *ndn.Interest) error {
+		return h(strings.TrimPrefix(i.Name.String(), name), w, i)
 	})
 }
