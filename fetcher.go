@@ -10,14 +10,14 @@ type Fetcher struct {
 // NewFetcher creates a new fetcher.
 func NewFetcher() *Fetcher {
 	return &Fetcher{
-		Handler: HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+		Handler: HandlerFunc(func(w ndn.Sender, i *ndn.Interest) error {
 			// face
 			d, err := w.SendInterest(i)
 			if err != nil {
-				return
+				return err
 			}
 			// collector
-			w.SendData(d)
+			return w.SendData(d)
 		}),
 	}
 }
@@ -42,15 +42,18 @@ func (c *collector) SendData(d *ndn.Data) error {
 // Fetch applies added middleware, and fetches a data packet in the end.
 //
 // Additional one-time middleware will be added after the ones added by invoking Use.
-func (f *Fetcher) Fetch(remote ndn.Sender, i *ndn.Interest, mw ...Middleware) []byte {
+func (f *Fetcher) Fetch(remote ndn.Sender, i *ndn.Interest, mw ...Middleware) ([]byte, error) {
 	h := f.Handler
 	for _, m := range mw {
 		h = m(h)
 	}
 	c := &collector{Sender: remote}
-	h.ServeNDN(c, i)
-	if c.Data == nil {
-		return nil
+	err := h.ServeNDN(c, i)
+	if err != nil {
+		return nil, err
 	}
-	return c.Content
+	if c.Data == nil {
+		return nil, nil
+	}
+	return c.Content, nil
 }

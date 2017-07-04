@@ -43,13 +43,17 @@ func TestMuxHandle(t *testing.T) {
 	var count int
 	m := New()
 	m.Use(fakeMiddleware)
-	m.HandleFunc("/A", func(_ ndn.Sender, _ *ndn.Interest) {
+	m.HandleFunc("/A", func(_ ndn.Sender, _ *ndn.Interest) error {
 		count++
+		return nil
 	}, fakeMiddleware)
 
-	m.ServeNDN(nil, &ndn.Interest{
+	err := m.ServeNDN(nil, &ndn.Interest{
 		Name: ndn.NewName("/A/B"),
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if want := 1; count != want {
 		t.Fatalf("expect %d, got %d", want, count)
@@ -58,8 +62,8 @@ func TestMuxHandle(t *testing.T) {
 
 func TestMuxRegister(t *testing.T) {
 	m := New()
-	m.HandleFunc("/A", func(_ ndn.Sender, _ *ndn.Interest) {})
-	m.HandleFunc("/B", func(_ ndn.Sender, _ *ndn.Interest) {})
+	m.HandleFunc("/A", func(_ ndn.Sender, _ *ndn.Interest) error { return nil })
+	m.HandleFunc("/B", func(_ ndn.Sender, _ *ndn.Interest) error { return nil })
 
 	pri, err := rsa.GenerateKey(rand.Reader, 1024)
 	if err != nil {

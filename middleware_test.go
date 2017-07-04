@@ -26,31 +26,33 @@ func fakeData() *ndn.Data {
 }
 
 var (
-	fakeHandler = HandlerFunc(func(w ndn.Sender, _ *ndn.Interest) {
-		w.SendData(fakeData())
+	fakeHandler = HandlerFunc(func(w ndn.Sender, _ *ndn.Interest) error {
+		return w.SendData(fakeData())
 	})
 )
 
 func fakeChecksumHandler(sig uint64) Handler {
-	return HandlerFunc(func(w ndn.Sender, _ *ndn.Interest) {
+	return HandlerFunc(func(w ndn.Sender, _ *ndn.Interest) error {
 		d := fakeData()
 		d.SignatureInfo.SignatureType = sig
-		d.WriteTo(tlv.NewWriter(ioutil.Discard))
-		w.SendData(d)
+		err := d.WriteTo(tlv.NewWriter(ioutil.Discard))
+		if err != nil {
+			return err
+		}
+		return w.SendData(d)
 	})
 }
 
 func server(collection ...*ndn.Data) Middleware {
 	return func(next Handler) Handler {
-		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) {
+		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) error {
 			for _, d := range collection {
 				if i.Name.Compare(d.Name) != 0 {
 					continue
 				}
-				w.SendData(d)
-				return
+				return w.SendData(d)
 			}
-			next.ServeNDN(w, i)
+			return next.ServeNDN(w, i)
 		})
 	}
 }
@@ -123,9 +125,12 @@ func TestMiddleware(t *testing.T) {
 		t.Log(i)
 
 		c := &collector{}
-		test.ServeNDN(c, &ndn.Interest{
+		err := test.ServeNDN(c, &ndn.Interest{
 			Name: ndn.NewName("/A/B"),
 		})
+		if err != nil {
+			t.Fatal(err)
+		}
 		if c.Data != nil {
 			// reset signature for deep equal
 			c.SignatureInfo = ndn.SignatureInfo{}
@@ -141,7 +146,10 @@ func TestVersioner(t *testing.T) {
 	want := fakeData()
 
 	c := &collector{}
-	Versioner(fakeHandler).ServeNDN(c, nil)
+	err := Versioner(fakeHandler).ServeNDN(c, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if c.Data == nil || want.Name.Len() >= c.Name.Len() {
 		t.Fatalf("expect %+v, got %+v", want, c.Data)
 	}
@@ -155,16 +163,20 @@ func TestListenNotify(t *testing.T) {
 
 	var count int
 	m := New()
-	m.Handle(Listener(producerName, func(name string, _ ndn.Sender, _ *ndn.Interest) {
+	m.Handle(Listener(producerName, func(name string, _ ndn.Sender, _ *ndn.Interest) error {
 		count++
 		if name != dataName {
 			t.Fatalf("expect %s, got %s", dataName, name)
 		}
+		return nil
 	}))
 
-	m.ServeNDN(nil, &ndn.Interest{
+	err := m.ServeNDN(nil, &ndn.Interest{
 		Name: Notify(producerName, dataName),
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if want := 1; count != want {
 		t.Fatalf("expect %d, got %d", want, count)
