@@ -35,5 +35,8 @@ func (p *Publisher) Publish(d *ndn.Data, mw ...Middleware) error {
 	for _, m := range mw {
 		h = m(h)
 	}
-	return h.ServeNDN(&cacher{Cache: p.Cache}, nil)
+	return h.ServeNDN(&cacher{
+		CacherOptions: CacherOptions{
+			Cache: p.Cache,
+		}}, nil)
 }

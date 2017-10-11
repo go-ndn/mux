@@ -58,7 +58,10 @@ func server(collection ...*ndn.Data) Middleware {
 }
 
 func fakeCacher(next Handler) Handler {
-	return RawCacher(ndn.NewCache(16), true)(next)
+	return RawCacher(&CacherOptions{
+		Cache: ndn.NewCache(16),
+		Copy:  true,
+	})(next)
 }
 
 func fakeVerifyRule(l int) ([]ndn.Key, []*VerifyRule, Middleware, error) {

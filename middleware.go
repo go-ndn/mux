@@ -20,10 +20,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-ndn/log"
 	"github.com/go-ndn/lpm"
 	"github.com/go-ndn/ndn"
 	"github.com/go-ndn/tlv"
+	"github.com/sirupsen/logrus"
 )
 
 // if data packet is signed, do nothing in middleware.
@@ -40,23 +40,37 @@ func signed(d *ndn.Data) bool {
 
 type cacher struct {
 	ndn.Sender
-	ndn.Cache
-	cpy bool
+	CacherOptions
+}
+
+// CacherOptions specifies how RawCacher serves data.
+type CacherOptions struct {
+	Cache       ndn.Cache
+	Copy        bool
+	SkipPrivate bool
 }
 
 func (c *cacher) SendData(d *ndn.Data) error {
-	if d.MetaInfo.CacheHint == ndn.CacheHintNoCache {
-		// producer indicates that this packet should not be cached
-		if c.Sender == nil {
-			return nil
+	// producer indicates that this packet should not be cached
+	switch d.MetaInfo.CacheControl {
+	case ndn.CacheControlPrivate:
+		if !c.SkipPrivate {
+			goto CACHE
 		}
-		return c.Sender.SendData(d)
+	case ndn.CacheControlNoStore:
+	default:
+		goto CACHE
 	}
-	c.Add(d)
 	if c.Sender == nil {
 		return nil
 	}
-	return copySend(c.Sender, d, c.cpy)
+	return c.Sender.SendData(d)
+CACHE:
+	c.Cache.Add(d)
+	if c.Sender == nil {
+		return nil
+	}
+	return copySend(c.Sender, d, c.Copy)
 }
 
 func copySend(w ndn.Sender, d *ndn.Data, cpy bool) error {
@@ -79,27 +93,33 @@ func (c *cacher) Hijack() ndn.Sender {
 //
 // If cpy is true, data packets will be copied when they are added to and retrieved
 // from content store.
-func RawCacher(cache ndn.Cache, cpy bool) Middleware {
+func RawCacher(opt *CacherOptions) Middleware {
 	return func(next Handler) Handler {
 		return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) error {
-			d := cache.Get(i)
+			d := opt.Cache.Get(i)
 			if d == nil {
-				return next.ServeNDN(&cacher{Sender: w, Cache: cache, cpy: cpy}, i)
+				return next.ServeNDN(&cacher{Sender: w, CacherOptions: *opt}, i)
 			}
-			return copySend(w, d, cpy)
+			return copySend(w, d, opt.Copy)
 		})
 	}
 }
 
 // Cacher creates a new Cacher middleware instance from the default content store.
-var Cacher = RawCacher(ndn.NewCache(65536), true)
+var Cacher = RawCacher(&CacherOptions{
+	Cache: ndn.NewCache(65536),
+	Copy:  true,
+})
 
 // Logger prints total time to serve an interest to os.Stderr.
 func Logger(next Handler) Handler {
 	return HandlerFunc(func(w ndn.Sender, i *ndn.Interest) error {
 		before := time.Now()
 		defer func() {
-			log.Printf("%s completed in %s\n", i.Name, time.Since(before))
+			logrus.WithFields(logrus.Fields{
+				"elapsed": time.Since(before),
+				"name":    i.Name,
+			}).Info("interest served")
 		}()
 		return next.ServeNDN(w, i)
 	})
@@ -228,6 +248,7 @@ type checksumVerifier struct {
 	ndn.Sender
 }
 
+// Errors returned by ChecksumVerifier.
 var (
 	ErrInvalidChecksum = errors.New("invalid checksum")
 )
@@ -586,10 +607,11 @@ type verifier struct {
 	rule []*VerifyRule
 }
 
+// Errors returned by Verifier.
 var (
 	ErrUntrustedKeyName = errors.New("untrusted key name")
 	ErrUntrustedData    = errors.New("untrusted data")
-	ErrNoData           = errors.New("no data")
+	ErrFetchKey         = errors.New("cannot fetch key")
 )
 
 func (v *verifier) verify(d *ndn.Data) error {
@@ -624,7 +646,7 @@ func (v *verifier) verify(d *ndn.Data) error {
 		}
 		if c.Data == nil {
 			// cannot fetch key
-			return ErrNoData
+			return ErrFetchKey
 		}
 
 		key, err := ndn.CertificateFromData(c.Data)
