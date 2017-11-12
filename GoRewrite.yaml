@@ -1,0 +1,9 @@
+spec:
+  - name: route
+    local: true
+    import: github.com/go-ndn/lpm/matcher
+    typeMap:
+      Type:
+        expr: Handler
+      TypeMatcher:
+        expr: routeMatcher

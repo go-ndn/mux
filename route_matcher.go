@@ -2,9 +2,7 @@ package mux
 
 import "github.com/go-ndn/lpm"
 
-type routeMatcher struct {
-	routeNode
-}
+type routeMatcher struct{ routeNode }
 
 var routeNodeValEmpty func(Handler) bool
 
@@ -16,7 +14,6 @@ type routeNode struct {
 func (n *routeNode) empty() bool {
 	return routeNodeValEmpty(n.val) && len(n.table) == 0
 }
-
 func (n *routeNode) update(key []lpm.Component, depth int, f func([]lpm.Component, Handler) Handler, exist, all bool) {
 	try := func() {
 		if !exist || !routeNodeValEmpty(n.val) {
@@ -27,7 +24,6 @@ func (n *routeNode) update(key []lpm.Component, depth int, f func([]lpm.Componen
 		try()
 		return
 	}
-
 	if n.table == nil {
 		if exist {
 			try()
@@ -35,7 +31,6 @@ func (n *routeNode) update(key []lpm.Component, depth int, f func([]lpm.Componen
 		}
 		n.table = make(map[string]routeNode)
 	}
-
 	v, ok := n.table[string(key[depth])]
 	if !ok {
 		if exist {
@@ -43,11 +38,9 @@ func (n *routeNode) update(key []lpm.Component, depth int, f func([]lpm.Componen
 			return
 		}
 	}
-
 	if all {
 		try()
 	}
-
 	v.update(key, depth+1, f, exist, all)
 	if v.empty() {
 		delete(n.table, string(key[depth]))
@@ -55,7 +48,6 @@ func (n *routeNode) update(key []lpm.Component, depth int, f func([]lpm.Componen
 		n.table[string(key[depth])] = v
 	}
 }
-
 func (n *routeNode) match(key []lpm.Component, depth int, f func(Handler), exist bool) {
 	try := func() {
 		if !exist || !routeNodeValEmpty(n.val) {
@@ -66,14 +58,12 @@ func (n *routeNode) match(key []lpm.Component, depth int, f func(Handler), exist
 		try()
 		return
 	}
-
 	if n.table == nil {
 		if exist {
 			try()
 		}
 		return
 	}
-
 	v, ok := n.table[string(key[depth])]
 	if !ok {
 		if exist {
@@ -81,10 +71,8 @@ func (n *routeNode) match(key []lpm.Component, depth int, f func(Handler), exist
 		}
 		return
 	}
-
 	v.match(key, depth+1, f, exist)
 }
-
 func (n *routeNode) visit(key []lpm.Component, f func([]lpm.Component, Handler) Handler) {
 	if !routeNodeValEmpty(n.val) {
 		n.val = f(key, n.val)
@@ -98,21 +86,17 @@ func (n *routeNode) visit(key []lpm.Component, f func([]lpm.Component, Handler) 
 		}
 	}
 }
-
 func (n *routeNode) Update(key []lpm.Component, f func(Handler) Handler, exist bool) {
 	n.update(key, 0, func(_ []lpm.Component, v Handler) Handler {
 		return f(v)
 	}, exist, false)
 }
-
 func (n *routeNode) UpdateAll(key []lpm.Component, f func([]lpm.Component, Handler) Handler, exist bool) {
 	n.update(key, 0, f, exist, true)
 }
-
 func (n *routeNode) Match(key []lpm.Component, f func(Handler), exist bool) {
 	n.match(key, 0, f, exist)
 }
-
 func (n *routeNode) Visit(f func([]lpm.Component, Handler) Handler) {
 	key := make([]lpm.Component, 0, 16)
 	n.visit(key, f)
