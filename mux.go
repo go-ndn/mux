@@ -22,9 +22,10 @@ func New() *Mux {
 	mux.Handler = HandlerFunc(func(w ndn.Sender, i *ndn.Interest) error {
 		var h Handler
 		mux.mu.RLock()
-		mux.Match(i.Name.Components, func(v Handler) {
-			h = v
-		}, true)
+		val, ok := mux.Match(i.Name.Components)
+		if ok {
+			h = val
+		}
 		mux.mu.RUnlock()
 
 		if h != nil {
@@ -46,7 +47,7 @@ func (mux *Mux) Handle(name string, h Handler, mw ...Middleware) {
 		h = m(h)
 	}
 	mux.mu.Lock()
-	mux.routeMatcher.Update(lpm.NewComponents(name), func(Handler) Handler { return h }, false)
+	mux.routeMatcher.Update(lpm.NewComponents(name), h)
 	mux.mu.Unlock()
 }
 
@@ -59,11 +60,11 @@ func (mux *Mux) HandleFunc(name string, h HandlerFunc, mw ...Middleware) {
 func (mux *Mux) Register(w ndn.Sender, key ndn.Key) error {
 	var names [][]lpm.Component
 	mux.mu.Lock()
-	mux.routeMatcher.Visit(func(name []lpm.Component, v Handler) Handler {
+	mux.routeMatcher.Visit(func(name []lpm.Component, v Handler) (Handler, bool) {
 		cpy := make([]lpm.Component, len(name))
 		copy(cpy, name)
 		names = append(names, cpy)
-		return v
+		return v, false
 	})
 	mux.mu.Unlock()
 

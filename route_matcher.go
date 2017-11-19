@@ -1,103 +1,114 @@
 package mux
 
-import "github.com/go-ndn/lpm"
+import (
+	"github.com/go-ndn/lpm"
+)
 
 type routeMatcher struct{ routeNode }
-
-var routeNodeValEmpty func(Handler) bool
-
 type routeNode struct {
-	val   Handler
-	table map[string]routeNode
+	val   *Handler
+	table map[string]*routeNode
 }
 
-func (n *routeNode) empty() bool {
-	return routeNodeValEmpty(n.val) && len(n.table) == 0
+func (n *routeNode) Empty() bool {
+	return n.val == nil && len(n.table) == 0
 }
-func (n *routeNode) update(key []lpm.Component, depth int, f func([]lpm.Component, Handler) Handler, exist, all bool) {
-	try := func() {
-		if !exist || !routeNodeValEmpty(n.val) {
-			n.val = f(key[:depth], n.val)
-		}
+func routeDeref(val *Handler) (Handler, bool) {
+	if val == nil {
+		var t Handler
+		return t, false
 	}
-	if len(key) == depth {
-		try()
+	return *val, true
+}
+func (n *routeNode) Match(key []lpm.Component) (val Handler, found bool) {
+	if len(key) == 0 {
+		return routeDeref(n.val)
+	}
+	if n.table == nil {
+		return routeDeref(n.val)
+	}
+	child, ok := n.table[string(key[0])]
+	if !ok {
+		return routeDeref(n.val)
+	}
+	return child.Match(key[1:])
+}
+func (n *routeNode) Get(key []lpm.Component) (val Handler, found bool) {
+	if len(key) == 0 {
+		return routeDeref(n.val)
+	}
+	if n.table == nil {
+		return routeDeref(nil)
+	}
+	child, ok := n.table[string(key[0])]
+	if !ok {
+		return routeDeref(nil)
+	}
+	return child.Get(key[1:])
+}
+func (n *routeNode) Update(key []lpm.Component, val Handler) {
+	if len(key) == 0 {
+		n.val = &val
 		return
 	}
 	if n.table == nil {
-		if exist {
-			try()
-			return
-		}
-		n.table = make(map[string]routeNode)
+		n.table = make(map[string]*routeNode)
 	}
-	v, ok := n.table[string(key[depth])]
-	if !ok {
-		if exist {
-			try()
-			return
-		}
+	if _, ok := n.table[string(key[0])]; !ok {
+		n.table[string(key[0])] = &routeNode{}
 	}
-	if all {
-		try()
-	}
-	v.update(key, depth+1, f, exist, all)
-	if v.empty() {
-		delete(n.table, string(key[depth]))
-	} else {
-		n.table[string(key[depth])] = v
-	}
+	n.table[string(key[0])].Update(key[1:], val)
 }
-func (n *routeNode) match(key []lpm.Component, depth int, f func(Handler), exist bool) {
-	try := func() {
-		if !exist || !routeNodeValEmpty(n.val) {
-			f(n.val)
-		}
-	}
-	if len(key) == depth {
-		try()
+func (n *routeNode) Delete(key []lpm.Component) {
+	if len(key) == 0 {
+		n.val = nil
 		return
 	}
 	if n.table == nil {
-		if exist {
-			try()
-		}
 		return
 	}
-	v, ok := n.table[string(key[depth])]
+	child, ok := n.table[string(key[0])]
 	if !ok {
-		if exist {
-			try()
-		}
 		return
 	}
-	v.match(key, depth+1, f, exist)
-}
-func (n *routeNode) visit(key []lpm.Component, f func([]lpm.Component, Handler) Handler) {
-	if !routeNodeValEmpty(n.val) {
-		n.val = f(key, n.val)
+	child.Delete(key[1:])
+	if child.Empty() {
+		delete(n.table, string(key[0]))
 	}
+}
+
+type routeUpdateFunc func([]lpm.Component, Handler) (val Handler, del bool)
+
+func (n *routeNode) UpdateAll(key []lpm.Component, f routeUpdateFunc) {
+	for i := len(key); i > 0; i-- {
+		k := key[:i]
+		val, _ := n.Get(k)
+		val2, del := f(k, val)
+		if !del {
+			n.Update(k, val2)
+		} else {
+			n.Delete(k)
+		}
+	}
+}
+func (n *routeNode) visit(key []lpm.Component, f func([]lpm.Component)) {
 	for k, v := range n.table {
 		v.visit(append(key, lpm.Component(k)), f)
-		if v.empty() {
-			delete(n.table, k)
-		} else {
-			n.table[k] = v
-		}
+	}
+	if n.val != nil {
+		f(key)
 	}
 }
-func (n *routeNode) Update(key []lpm.Component, f func(Handler) Handler, exist bool) {
-	n.update(key, 0, func(_ []lpm.Component, v Handler) Handler {
-		return f(v)
-	}, exist, false)
-}
-func (n *routeNode) UpdateAll(key []lpm.Component, f func([]lpm.Component, Handler) Handler, exist bool) {
-	n.update(key, 0, f, exist, true)
-}
-func (n *routeNode) Match(key []lpm.Component, f func(Handler), exist bool) {
-	n.match(key, 0, f, exist)
-}
-func (n *routeNode) Visit(f func([]lpm.Component, Handler) Handler) {
-	key := make([]lpm.Component, 0, 16)
-	n.visit(key, f)
+func (n *routeNode) Visit(f routeUpdateFunc) {
+	n.visit(make([]lpm.Component, 0, 16), func(k []lpm.Component) {
+		val, found := n.Get(k)
+		if found {
+			val2, del := f(k, val)
+			if !del {
+				n.Update(k, val2)
+			} else {
+				n.Delete(k)
+			}
+		}
+	})
 }
